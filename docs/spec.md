@@ -374,6 +374,7 @@ Everything below runs offline; no Slack, no LLM, no sleeps.
 | Layer | Tooling | Asserts |
 | --- | --- | --- |
 | `store` contract | `pytest.mark.parametrize` over `InMemoryStore` + `SqliteStore` | identical behaviour for both implementations |
+| `store` stateful | Hypothesis `RuleBasedStateMachine` | invariants hold under arbitrary interleavings (§9.1) |
 | `memory/context` | fake store, fake clock | budget ceilings respected, tier ordering, exclusions |
 | compaction | scripted LLM returning canned summaries | trigger thresholds, high-water mark, bad-summary guard |
 | fact extraction | scripted LLM, malformed JSON cases | dedupe, caps, scope validation, silent failure |
@@ -384,6 +385,39 @@ Everything below runs offline; no Slack, no LLM, no sleeps.
 
 Coverage gate: 85% on `memory/`, `history/`, `llm/`, `slack/render`,
 `slack/handlers`. Wiring in `__main__.py` and `slack/app.py` is excluded.
+
+### 9.1 Model-based and stateful testing
+
+Example-based tests prove the happy path; stateful tests hunt for orders of
+operations nobody thought of. Two machines, both
+`hypothesis.stateful.RuleBasedStateMachine`:
+
+**StoreMachine** — drives a thread through arbitrary interleavings of
+`append_turn`, `compact`, `extract_facts`, `archive`, `open_other_thread`.
+Rules write to the store *and* to a plain-dict shadow model; invariants compare
+the two and assert design rules:
+
+- `summarized_through_msg_id` never decreases
+- no message is both folded into the summary and inside the short-term window
+- the assembled prompt never exceeds `PROMPT_BUDGET_TOKENS`
+- archived threads contribute nothing to prompt assembly
+- `facts` stays unique per `(scope, scope_key, content_hash)` and under its cap
+- window contents are always a suffix of the thread (no holes)
+
+The whole machine is parametrized over both store implementations, so any
+divergence between the fast fake and SQLite fails here rather than in a handler
+test.
+
+**StreamerMachine** — rules `delta(text=…)` and `tick(seconds=…)`, invariants:
+
+- every posted/updated text is a prefix of the full accumulated answer
+- text never shrinks between updates for the same message
+- updates are spaced by at least `STREAM_INTERVAL` of virtual clock
+- the final update always equals the complete answer
+
+Hypothesis settings: `deadline=None` (tokenizer calls are slow), 50 examples
+dev / 300 in CI, and every counterexample that turns up is frozen as an
+`@example(...)` regression so the seed is never needed again.
 
 Two rules keep this honest: assertions are on observable behaviour (messages
 posted, update sequence, rows written), not on internals or call counts of
@@ -411,6 +445,7 @@ Order of slices, so every dependency exists before its consumer:
 config        settings load/validate, missing-var errors
 tokens        estimator + budget arithmetic
 store         contract suite: threads, messages, facts, FTS recall, archive
+              + StoreMachine stateful invariants (both implementations)
 llm/client    request shape (respx), streaming assembly, param dropping
 memory/ctx    tier selection, budget ceilings
 compaction    trigger + rolling summary + guardrails
@@ -446,7 +481,7 @@ CI: `uv run pytest -q` (slow tests deselected) plus `ruff`; no node matrices.
 | --- | --- | --- |
 | M0 | Slack app from `slack/manifest.yaml`, tokens in `.env` | `auth.test` returns `ok: true` |
 | M1 | config + tokens + LLM client, TDD'd | `pytest` green; CLI prints one reply |
-| M2 | store contract suite + sqlite schema | both stores pass the same tests |
+| M2 | store contract suite + stateful machine + sqlite schema | both stores pass the same tests and the same StateMachine |
 | M3 | Bolt app: mention + DM, single-shot, no memory | bot replies in a real channel |
 | M4 | streaming renderer | long answer splits correctly, updates throttled |
 | M5 | memory tiers: window, compaction, facts, recall | follow-ups work; prompt size flat after 50 turns |
