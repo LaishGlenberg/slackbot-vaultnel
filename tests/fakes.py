@@ -6,8 +6,8 @@ tests use it, so it is held to the same contract suite as SqliteStore.
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 from slackbot_vaultnel.history.store import Thread, Turn
 
@@ -146,3 +146,61 @@ class InMemoryStore:
         updated = replace(thread, archived=True, updated_at=self._clock())
         self._threads[thread.id] = updated
         return updated
+
+
+@dataclass(frozen=True)
+class SlackCall:
+    method: str
+    channel: str
+    thread_ts: str | None
+    ts: str
+    text: str
+    when: datetime
+
+
+class ManualClock:
+    """Virtual time: tests advance it instead of sleeping."""
+
+    def __init__(self, start: datetime = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)) -> None:
+        self._now = start
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, seconds: float) -> datetime:
+        self._now += timedelta(seconds=seconds)
+        return self._now
+
+
+class FakeSlackClient:
+    """Records Slack calls. Only the two methods the renderer needs exist."""
+
+    def __init__(self, *, clock: ManualClock | None = None, fail_updates: int = 0) -> None:
+        self._clock = clock
+        self.fail_updates = fail_updates
+        self.posts: list[SlackCall] = []
+        self.updates: list[SlackCall] = []
+        self.texts: dict[str, str] = {}
+        self._next_ts = 1
+
+    def _when(self) -> datetime:
+        return self._clock.now() if self._clock else datetime.now(UTC)
+
+    async def chat_postMessage(
+        self, *, channel: str, thread_ts: str | None = None, text: str
+    ) -> dict[str, object]:
+        ts = f"1700000000.000{self._next_ts:03d}"
+        self._next_ts += 1
+        call = SlackCall("post", channel, thread_ts, ts, text, self._when())
+        self.posts.append(call)
+        self.texts[ts] = text
+        return {"ok": True, "ts": ts}
+
+    async def chat_update(self, *, channel: str, ts: str, text: str) -> dict[str, object]:
+        if self.fail_updates > 0:
+            self.fail_updates -= 1
+            raise RuntimeError("slack is unhappy")
+        call = SlackCall("update", channel, None, ts, text, self._when())
+        self.updates.append(call)
+        self.texts[ts] = text
+        return {"ok": True, "ts": ts}

@@ -430,8 +430,14 @@ test.
 
 - every posted/updated text is a prefix of the full accumulated answer
 - text never shrinks between updates for the same message
-- updates are spaced by at least `STREAM_INTERVAL` of virtual clock
-- the final update always equals the complete answer
+- updates are spaced by at least `STREAM_INTERVAL` unless the ≥120-character
+  burst rule skipped the wait (the deliberate rate/feel tradeoff in §4.2)
+- the final update always equals the complete answer (status markers stripped)
+
+Streamed bodies are compared without the trailing `:eyes:`/`:white_check_mark:`
+marker, because decoration is presentation and would otherwise break the
+prefix property. Both properties were mutation-tested: always-flush and
+shrink-by-one implementations fail the machine.
 
 Hypothesis settings: `deadline=None` (tokenizer calls are slow), 50 examples
 dev / 300 in CI, and every counterexample that turns up is frozen as an
@@ -465,8 +471,8 @@ tokens        estimator + budget arithmetic                        [done]
 store         contract suite + StoreMachine stateful invariants    [done]
 llm/client    streaming, retries, params, reasoning effort         [done]
 memory/ctx    tier selection, budget ceilings, prompt assembly     [done]
-render        chunking, throttle, fence repair                      [next]
-handlers      app_mention, message.im, /ask, reset
+render        chunking, throttle, fence repair                      [done]
+handlers      app_mention, message.im, /ask, reset                  [next]
 wiring        __main__ + real socket  ->  bot usable in Slack here
 compaction    rolling summary + guardrails
 extraction    facts: parse, dedupe, caps

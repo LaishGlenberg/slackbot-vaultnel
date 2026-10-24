@@ -15,9 +15,10 @@ conversation memory in SQLite. Python 3.12, uv, asyncio.
 
 Done: config, token budgeting, store (+stateful machine), LLM client,
 thinking-level control, `memory/context.py` (tier selection + hard budget
-ceiling). 139 tests green.
-Next slice: `slack/render.py` — streaming placeholder, throttle, chunking
-(spec §4.2–4.3), then handlers + wiring.
+ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair).
+160 tests green.
+Next slice: `slack/handlers.py` — mention/DM handling, prompt assembly call,
+streamed reply, then wiring in `__main__.py`.
 
 ## Commands
 

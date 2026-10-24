@@ -73,3 +73,16 @@ lowest-priority first, then the 4-message short-term minimum is trimmed from
 the oldest end, and only a mandatory persona + question that cannot fit at all
 causes truncation of the question. Property tests assert this for arbitrary
 histories.
+
+## 2026-10 — Streamer: markers are decoration, throttle is per-message
+
+Streamed visible text carries a trailing status marker (`:eyes:` on the
+placeholder, `:white_check_mark:` / `:warning:` on the final update). Tests and
+the stateful machine compare `strip_status(...)`, so presentation never weakens
+the real invariants (prefix, never-shrink, final equals answer).
+
+Flushes happen when the interval elapses *or* ≥120 characters are pending, per
+spec §4.2. The burst rule deliberately allows updates closer together than
+`STREAM_INTERVAL`; the machine asserts spacing only for interval-driven
+updates. Slack update failures are logged, retried on the next flush, and the
+final text is posted as a fresh message if the last update never succeeds.
