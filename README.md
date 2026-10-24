@@ -34,8 +34,9 @@ Socket Mode, and an API key for DeepSeek or OpenRouter.
    # fill SLACK_BOT_TOKEN, SLACK_APP_TOKEN and LLM_API_KEY
    ```
 
-   Optional: set `MCP_SERVERS` to give it tools. Example for GitHub's remote
-   MCP server is in `.env.example`; put a read-only token in `GITHUB_TOKEN`.
+   Optional: copy `mcp.example.json` to `data/mcp.json` to give it tools, and
+   put a read-only token in `GITHUB_TOKEN` in `.env`. Secrets never go in
+   `mcp.json`.
 
 3. Run it:
 

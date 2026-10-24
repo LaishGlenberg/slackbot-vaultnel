@@ -63,6 +63,15 @@ sudo cp ~/slackbot-vaultnel/deploy/update.sh \
 sudo nano /opt/vaultnel/.env   # fill tokens + LLM_API_KEY
 ```
 
+Optional integrations: `mcp.json` lives on the data volume next to the
+database, so put it there once (the token stays in `.env`):
+
+```bash
+sudo nano /opt/vaultnel/mcp.json      # copy mcp.example.json and edit it
+sudo docker run --rm -v vaultnel-data:/data -v /opt/vaultnel:/cfg \
+  alpine cp /cfg/mcp.json /data/mcp.json
+```
+
 Append the image reference to the same file:
 
 ```bash

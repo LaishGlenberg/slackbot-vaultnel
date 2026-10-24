@@ -15,19 +15,102 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
-from slackbot_vaultnel.config import MCPServerConfig
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+
+from slackbot_vaultnel.config import ConfigError
 
 logger = logging.getLogger(__name__)
 
 
 class MCPError(RuntimeError):
     """An MCP server could not be used. Never fatal to a reply."""
+
+
+#: The config file sits next to the database, so the container volume already
+#: carries it: ``data/mcp.json`` in development, ``/data/mcp.json`` deployed.
+MCP_CONFIG_FILENAME = "mcp.json"
+MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+#: Upper-case only, so a pasted token in ``token_env`` fails instead of half-working.
+_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+class MCPServerConfig(BaseModel):
+    """One remote MCP server. Secrets are named here, never stored."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str
+    token_env: str | None = None
+    tools: tuple[str, ...] = ()
+
+    @field_validator("url")
+    @classmethod
+    def _absolute_https(cls, value: str) -> str:
+        parts = urlsplit(value.strip())
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("url must be an absolute http(s) URL")
+        if parts.scheme == "http" and parts.hostname not in _LOCAL_HOSTS:
+            raise ValueError("url must use https (http is allowed for localhost only)")
+        return value.strip()
+
+    @field_validator("token_env")
+    @classmethod
+    def _env_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _ENV_NAME_RE.match(value):
+            raise ValueError(
+                "token_env must name an environment variable such as GITHUB_TOKEN, "
+                "not contain the token itself"
+            )
+        return value
+
+    @field_validator("tools")
+    @classmethod
+    def _clean_tools(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(name.strip() for name in value if name.strip())
+
+
+def load_mcp_config(path: Path) -> dict[str, MCPServerConfig]:
+    """Read ``mcp.json``. A missing file means no integrations, not an error."""
+
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ConfigError(f"could not read {path}: {exc.strerror}") from None
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"{path} is not valid JSON ({exc.msg} at position {exc.pos})") from None
+
+    if not isinstance(raw, dict) or not isinstance(raw.get("mcpServers"), dict):
+        raise ConfigError(f'{path} must contain an object under "mcpServers"')
+
+    servers: dict[str, MCPServerConfig] = {}
+    for name, entry in raw["mcpServers"].items():
+        if not isinstance(name, str) or not MCP_SERVER_NAME_RE.match(name):
+            raise ConfigError(
+                f"{path}: server name {name!r} must match {MCP_SERVER_NAME_RE.pattern} "
+                "(it becomes a tool name prefix)"
+            )
+        try:
+            servers[name] = MCPServerConfig.model_validate(entry)
+        except ValidationError as exc:
+            first = exc.errors(include_url=False)[0]
+            where = ".".join(str(part) for part in first["loc"])
+            message = str(first["msg"]).removeprefix("Value error, ")
+            raise ConfigError(f"{path}: mcpServers.{name}.{where}: {message}") from None
+    return servers
 
 
 @dataclass(frozen=True)

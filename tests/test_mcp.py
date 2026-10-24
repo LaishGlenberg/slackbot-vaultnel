@@ -13,11 +13,11 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from slackbot_vaultnel.config import MCPServerConfig
 from slackbot_vaultnel.integrations.mcp import (
     HttpMCPClient,
     MCPError,
     MCPResult,
+    MCPServerConfig,
     MCPTool,
     result_text,
     tool_from_sdk,

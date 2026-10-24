@@ -7,12 +7,18 @@ import contextlib
 import logging
 import signal
 import sys
+from typing import Any
 
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
 from slackbot_vaultnel.config import ConfigError, Settings, load_settings
 from slackbot_vaultnel.history.store import SqliteStore, utcnow
-from slackbot_vaultnel.integrations.mcp import HttpMCPClient, MCPError
+from slackbot_vaultnel.integrations.mcp import (
+    MCP_CONFIG_FILENAME,
+    HttpMCPClient,
+    MCPError,
+    load_mcp_config,
+)
 from slackbot_vaultnel.integrations.tools import build_tools
 from slackbot_vaultnel.llm.agent import Tooling
 from slackbot_vaultnel.llm.client import OpenAICompatClient
@@ -37,14 +43,15 @@ async def run() -> int:
     llm = _build_llm(settings)
     writer = MemoryWriter(store=store, llm=llm, settings=settings, clock=utcnow)
     await writer.start()
-    mcp = HttpMCPClient(settings.mcp_servers, timeout=settings.mcp_timeout_seconds)
+    servers = load_mcp_config(settings.db_path.parent / MCP_CONFIG_FILENAME)
+    mcp = HttpMCPClient(servers, timeout=settings.mcp_timeout_seconds)
     try:
         app = create_app(settings)
         auth = await app.client.auth_test()
         bot_user_id = _string(auth.get("user_id"))
         logger.info("authenticated as %s (%s)", auth.get("user"), bot_user_id)
 
-        tooling = await _discover_tools(mcp, settings)
+        tooling = await _discover_tools(mcp, servers)
         handlers = Handlers(
             client=app.client,
             store=store,
@@ -74,10 +81,10 @@ async def run() -> int:
     return 0
 
 
-async def _discover_tools(mcp: HttpMCPClient, settings: Settings) -> Tooling | None:
+async def _discover_tools(mcp: HttpMCPClient, servers: dict[str, Any]) -> Tooling | None:
     """One discovery pass at startup; a dead integration never blocks the bot."""
 
-    if not settings.mcp_servers:
+    if not servers:
         return None
     try:
         discovered = await mcp.list_tools()

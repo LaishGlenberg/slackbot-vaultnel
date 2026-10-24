@@ -274,20 +274,27 @@ reaction share `store.archive_thread`, so facts and raw rows survive either way.
 
 ### 5.7 Integrations (MCP)
 
-External services are configuration, not code. `MCP_SERVERS` is a JSON object
-of remote MCP servers; another integration is another entry, not another module.
+External services are configuration, not code. `mcp.json` describes remote MCP
+servers; another integration is another entry, not another module. It lives
+next to the database — `data/mcp.json` in development, `/data/mcp.json` in the
+container — so the existing volume already carries it and no new mount or path
+variable is needed. A missing file means no integrations. `mcp.example.json` is
+the template.
 
 ```json
-{"github": {"url": "https://api.githubcopilot.com/mcp/",
-            "token_env": "GITHUB_TOKEN",
-            "tools": ["get_pull_request", "list_pull_requests", "get_check_runs"]}}
+{"mcpServers": {"github": {
+    "url": "https://api.githubcopilot.com/mcp/",
+    "token_env": "GITHUB_TOKEN",
+    "tools": ["get_pull_request", "list_pull_requests", "get_check_runs"]}}}
 ```
 
 - Discovery runs once at startup and connects lazily per server. A server that
   fails is logged and skipped; the rest still work. Only when every server fails
   does the bot start without tools.
 - `token_env` **names** the environment variable holding a bearer token. Secrets
-  are never inlined in config, never logged, and never sent to the model.
+  are never inlined in config, never logged, and never sent to the model. The
+  name must be upper-case, so a pasted token fails at startup instead of
+  half-working.
 - `tools` is an allowlist. Remote servers expose 30–40 tools whose schemas cost
   prompt space before the user says anything, so an empty allowlist on a 6000
   token budget is a mistake, not a default.
@@ -338,7 +345,6 @@ of remote MCP servers; another integration is another entry, not another module.
 | `PROMPT_BUDGET_TOKENS` | no | `6000` | hard ceiling |
 | `THREAD_TTL_HOURS` | no | `72` | soft reset |
 | `MEMORY_QUEUE_MAX` | no | `100` | |
-| `MCP_SERVERS` | no | `{}` | JSON: `{name: {url, token_env?, tools?}}` |
 | `MCP_ROUNDS` | no | `3` | tool rounds before a tool-free final answer |
 | `MCP_CALLS_PER_TURN` | no | `4` | hard cap on tool executions per reply |
 | `MCP_RESULT_TOKENS` | no | `1200` | per tool result, before wrapping |
@@ -347,6 +353,10 @@ of remote MCP servers; another integration is another entry, not another module.
 | `MAX_CONCURRENT_LLM` | no | `4` | global semaphore |
 | `STREAM_INTERVAL` | no | `1.0` | seconds between updates |
 | `LOG_LEVEL` | no | `INFO` | |
+
+Integration servers are the one exception to env-var config: they live in
+`mcp.json` next to the database because a JSON blob inside `.env` needs shell
+escaping and hides the token-naming rule. Budgets stay in env.
 
 Secrets are never logged; startup logs a redacted summary (first 6 chars of
 each token).

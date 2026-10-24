@@ -192,6 +192,12 @@ Structure: `mcp` SDK behind `HttpMCPClient` (lazy per-server sessions, allowlist
 partial failure), pure mapping functions in `integrations/tools.py`, the loop in
 `llm/agent.py`. No new abstraction over messages or memory.
 
+Server config lives in `mcp.json` next to the database, not in an environment
+variable. JSON in `.env` needs shell escaping, and it hides the one rule that
+matters (`token_env` names a variable; the token is never in the config). The
+file also matches every other MCP client. Cost: the file must travel with the
+volume — which it does, because it sits beside the SQLite database.
+
 Costs, accepted:
 
 - Tool schemas and results compete with the 6000-token prompt budget. The

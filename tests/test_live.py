@@ -46,12 +46,7 @@ async def test_live_plain_round_trip():
     llm = client()
 
     text = "".join(
-        [
-            part
-            async for part in llm.stream(
-                [{"role": "user", "content": "Reply with exactly: OK"}]
-            )
-        ]
+        [part async for part in llm.stream([{"role": "user", "content": "Reply with exactly: OK"}])]
     )
 
     assert "OK" in text
