@@ -6,6 +6,7 @@ tests use it, so it is held to the same contract suite as SqliteStore.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -173,13 +174,24 @@ class ManualClock:
 
 
 class FakeSlackClient:
-    """Records Slack calls. Only the two methods the renderer needs exist."""
+    """Records Slack calls made by the renderer and handlers."""
 
-    def __init__(self, *, clock: ManualClock | None = None, fail_updates: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        clock: ManualClock | None = None,
+        fail_updates: int = 0,
+        users: dict[str, str] | None = None,
+        fail_reactions: bool = False,
+    ) -> None:
         self._clock = clock
         self.fail_updates = fail_updates
+        self.users = users or {}
+        self.fail_reactions = fail_reactions
         self.posts: list[SlackCall] = []
         self.updates: list[SlackCall] = []
+        self.reactions: list[tuple[str, str, str]] = []
+        self.ephemerals: list[tuple[str, str, str]] = []
         self.texts: dict[str, str] = {}
         self._next_ts = 1
 
@@ -204,3 +216,79 @@ class FakeSlackClient:
         self.updates.append(call)
         self.texts[ts] = text
         return {"ok": True, "ts": ts}
+
+    async def reactions_add(self, *, channel: str, timestamp: str, name: str) -> dict[str, object]:
+        if self.fail_reactions:
+            raise RuntimeError("reactions are unavailable")
+        self.reactions.append(("add", name, timestamp))
+        return {"ok": True}
+
+    async def reactions_remove(
+        self, *, channel: str, timestamp: str, name: str
+    ) -> dict[str, object]:
+        if self.fail_reactions:
+            raise RuntimeError("reactions are unavailable")
+        self.reactions.append(("remove", name, timestamp))
+        return {"ok": True}
+
+    async def users_info(self, *, user: str) -> dict[str, object]:
+        name = self.users.get(user)
+        if name is None:
+            raise RuntimeError(f"unknown user {user}")
+        return {
+            "ok": True,
+            "user": {
+                "id": user,
+                "name": name,
+                "real_name": name,
+                "profile": {"display_name": name},
+            },
+        }
+
+    async def chat_postEphemeral(self, *, channel: str, user: str, text: str) -> dict[str, object]:
+        self.ephemerals.append((channel, user, text))
+        return {"ok": True}
+
+
+class ScriptedLLM:
+    """Async LLM fake: canned reply, optional delay, records every prompt."""
+
+    def __init__(
+        self,
+        *replies: str,
+        delay: float = 0.0,
+        error: Exception | None = None,
+    ) -> None:
+        self.replies = list(replies) or ["scripted reply"]
+        self.delay = delay
+        self.error = error
+        self.calls: list[list[dict[str, str]]] = []
+        self.active = 0
+        self.max_active = 0
+
+    def stream(self, messages, *, model=None, max_tokens=None, temperature=None):
+        return self._stream(list(messages))
+
+    async def _stream(self, messages):
+        self.calls.append(messages)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            if self.error is not None:
+                raise self.error
+            reply = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+            for chunk in reply:
+                if self.delay:
+                    await asyncio.sleep(self.delay)
+                yield chunk
+        finally:
+            self.active -= 1
+
+    async def complete(self, messages, *, model=None, max_tokens=None, temperature=None):
+        from slackbot_vaultnel.llm.client import Completion
+
+        self.calls.append(list(messages))
+        if self.error is not None:
+            raise self.error
+        text = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+        return Completion(text=text, model="fake", tokens_in=1, tokens_out=1)

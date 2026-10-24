@@ -86,3 +86,20 @@ spec §4.2. The burst rule deliberately allows updates closer together than
 `STREAM_INTERVAL`; the machine asserts spacing only for interval-driven
 updates. Slack update failures are logged, retried on the next flush, and the
 final text is posted as a fresh message if the last update never succeeds.
+
+## 2026-10 — Handlers: ack first, then stream
+
+Long answers exceed Slack's 3-second acknowledgement window, and an unacked
+event is retried — two identical replies. Event and command listeners are
+therefore Bolt *lazy listeners*: the envelope is acked immediately and the
+work runs in the background. Duplicate `event_id`s are also dropped in a
+bounded set, so a retry that slips through cannot answer twice.
+
+Messages within one thread share an `asyncio.Lock`, which keeps answers in
+order without serializing unrelated conversations. Until `memory/writer.py`
+lands, handlers append turns directly after the stream through one small
+`_persist` seam; the reply path never waits on the write.
+
+`/ask forget me` currently confirms that no user facts are stored, because
+facts do not exist yet. The extraction slice replaces that branch with a real
+delete.

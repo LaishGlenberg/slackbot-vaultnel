@@ -166,7 +166,7 @@ class Renderer:
         client: SlackReplyClient,
         *,
         channel: str,
-        thread_ts: str,
+        thread_ts: str | None,
         interval: float = 1.0,
         clock: Callable[[], datetime] = utcnow,
         limit: int = CHUNK_CHARS,
