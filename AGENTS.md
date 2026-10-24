@@ -15,10 +15,12 @@ conversation memory in SQLite. Python 3.12, uv, asyncio.
 
 Done: config, token budgeting, store (+stateful machine), LLM client,
 thinking-level control, `memory/context.py` (tier selection + hard budget
-ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair).
-160 tests green.
-Next slice: `slack/handlers.py` — mention/DM handling, prompt assembly call,
-streamed reply, then wiring in `__main__.py`.
+ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair),
+`slack/handlers.py` (filter/dedupe, thread locks, replies, persistence),
+`slack/app.py` + `__main__.py` (ack-first lazy listeners, socket lifecycle).
+185 tests green; the bot connects and answers live.
+Next slice: `memory/writer.py` + compaction — rolling summary, write queue,
+bad-summary guardrails.
 
 ## Commands
 

@@ -95,6 +95,10 @@ network, no Slack, no sleeping.
 
 ### 4.2 Per-message flow
 
+0. Acknowledge the Socket Mode envelope immediately and run the rest as a
+   Bolt lazy listener. Slack retries an event after 3 seconds and a streamed
+   answer is slower than that; duplicate `event_id`s are dropped as a second
+   line of defence.
 1. Add `:eyes:` reaction as an instant ack (best-effort; failure is non-fatal).
 2. `async with thread_lock(channel, thread_ts)` so messages in one thread are
    answered in order rather than interleaved.
@@ -472,9 +476,9 @@ store         contract suite + StoreMachine stateful invariants    [done]
 llm/client    streaming, retries, params, reasoning effort         [done]
 memory/ctx    tier selection, budget ceilings, prompt assembly     [done]
 render        chunking, throttle, fence repair                      [done]
-handlers      app_mention, message.im, /ask, reset                  [next]
-wiring        __main__ + real socket  ->  bot usable in Slack here
-compaction    rolling summary + guardrails
+handlers      app_mention, message.im, /ask, reset                  [done]
+wiring        __main__ + real socket  ->  bot usable in Slack here [done]
+compaction    rolling summary + writer + guardrails                 [next]
 extraction    facts: parse, dedupe, caps
 recall        FTS snippet retrieval
 reset         archive flow, TTL, /ask commands
