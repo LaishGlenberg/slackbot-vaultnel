@@ -20,3 +20,6 @@ data/
 .coverage
 htmlcov/
 .hypothesis/
+
+# Session handoff transcripts
+prev-chat.md

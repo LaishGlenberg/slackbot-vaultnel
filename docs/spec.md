@@ -204,11 +204,20 @@ user:    current message
 ```
 
 Total ceiling `PROMPT_BUDGET_TOKENS` (6000). Slots are allocated greedily in
-that order and each tier trims itself; nothing is silently concatenated. Token
+that order and each tier trims itself; nothing is silently concatenated. If the
+ceiling would still break (a short-term window padded by the 4-message
+minimum), the oldest window turns are dropped. The current message is
+truncated only if the mandatory persona + question cannot fit at all. Token
 counts are computed at insert time and stored on the row, so assembly does not
 re-tokenize history. `tiktoken` `cl100k_base` is used as an approximation —
 documented as approximate for DeepSeek/OpenRouter tokenizers — with output
 reserved at `LLM_MAX_TOKENS`.
+
+Long-term inputs are **passed in**, not fetched here: `PromptRequest` carries
+`facts` and `snippets`, already scoped and ranked by the caller. Assembly owns
+selection and formatting only. That keeps it a pure function of
+`(request, store, budget)` and lets retrieval (facts, FTS) land later without
+touching prompt assembly.
 
 ### 5.5 Write path
 
@@ -409,7 +418,6 @@ the two and assert design rules:
 
 - `summarized_through_msg_id` never decreases
 - no message is both folded into the summary and inside the short-term window
-- the assembled prompt never exceeds `PROMPT_BUDGET_TOKENS`
 - archived threads contribute nothing to prompt assembly
 - `facts` stays unique per `(scope, scope_key, content_hash)` and under its cap
 - window contents are always a suffix of the thread (no holes)
@@ -456,8 +464,8 @@ config        settings load/validate, missing-var errors          [done]
 tokens        estimator + budget arithmetic                        [done]
 store         contract suite + StoreMachine stateful invariants    [done]
 llm/client    streaming, retries, params, reasoning effort         [done]
-memory/ctx    tier selection, budget ceilings, prompt assembly     [next]
-render        chunking, throttle, fence repair
+memory/ctx    tier selection, budget ceilings, prompt assembly     [done]
+render        chunking, throttle, fence repair                      [next]
 handlers      app_mention, message.im, /ask, reset
 wiring        __main__ + real socket  ->  bot usable in Slack here
 compaction    rolling summary + guardrails
@@ -473,6 +481,10 @@ handlers are written against the `PromptRequest` interface: adding compaction
 and recall later only changes what the caller puts into that request, not the
 handler pipeline or the message flow. Short-term window assembly is part of
 `memory/ctx`, so the first working bot already has usable per-thread context.
+
+The hard-ceiling guarantee is property-tested directly (`PromptBudget` highs
+and lows): whatever the history, facts and snippets, the assembled prompt never
+exceeds `total` and the window stays a contiguous suffix.
 
 Interfaces get defined first because tests drive them: `Store` protocol, then
 `InMemoryStore` (fast fake), then `SqliteStore` (real), with one contract suite

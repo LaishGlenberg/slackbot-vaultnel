@@ -59,3 +59,17 @@ Originally strict dependency order (memory before handlers). Reordered so
 renderer + handlers land first and the bot is usable in Slack earlier. Handlers
 are written against `PromptRequest`, so later compaction/recall work only
 changes what the caller puts into that request.
+
+## 2026-10 — Prompt assembly owns selection, not retrieval
+
+`build(request, store, budget)` receives facts and recalled snippets on the
+request instead of querying the facts table or FTS itself. Assembly stays a
+pure, fast-to-test function of its inputs, and retrieval can land after the
+working bot without changing it. Cost: callers must scope and rank memories
+(facts by user/channel scope, snippets by BM25) before calling `build`.
+
+The total budget is a hard ceiling, not a target: optional tiers are dropped
+lowest-priority first, then the 4-message short-term minimum is trimmed from
+the oldest end, and only a mandatory persona + question that cannot fit at all
+causes truncation of the question. Property tests assert this for arbitrary
+histories.

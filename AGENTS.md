@@ -14,9 +14,10 @@ conversation memory in SQLite. Python 3.12, uv, asyncio.
 ## Status
 
 Done: config, token budgeting, store (+stateful machine), LLM client,
-thinking-level control. 115 tests green.
-Next slice: `memory/context.py` — `PromptRequest`, tier selection, budget
-ceilings (spec §5.4, §10). Then renderer, handlers, wiring (spec §12).
+thinking-level control, `memory/context.py` (tier selection + hard budget
+ceiling). 139 tests green.
+Next slice: `slack/render.py` — streaming placeholder, throttle, chunking
+(spec §4.2–4.3), then handlers + wiring.
 
 ## Commands
 
@@ -38,6 +39,8 @@ implementation, then refactor. See `docs/spec.md` §10 for the slice order and
 
 Tests never touch Slack, the network, or the real `.env`. Dependencies
 (`Store`, `LLMClient`, `clock`) are injected; fakes live in `tests/fakes.py`.
+
+Do not pile unrelated changes on top of eachother without committing.
 
 ## Docs
 
