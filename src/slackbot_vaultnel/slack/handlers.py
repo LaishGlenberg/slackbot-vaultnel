@@ -34,6 +34,7 @@ from slackbot_vaultnel.history.store import Store, Thread, Turn, utcnow
 from slackbot_vaultnel.llm.client import AuthError, LLMError, RateLimited
 from slackbot_vaultnel.memory.context import PromptBudget, PromptRequest, build
 from slackbot_vaultnel.memory.facts import facts_for_prompt
+from slackbot_vaultnel.memory.recall import recall_for_prompt
 from slackbot_vaultnel.memory.tokens import count_tokens
 from slackbot_vaultnel.memory.writer import DirectTurnWriter, TurnWriter
 from slackbot_vaultnel.slack.render import Renderer, SlackReplyClient
@@ -251,6 +252,18 @@ class Handlers:
                 logger.exception("could not load facts for %s/%s", channel, memory_thread_ts)
                 facts = []
 
+            try:
+                snippets = await recall_for_prompt(
+                    self.store,
+                    channel_id=channel,
+                    thread_ts=memory_thread_ts,
+                    text=text,
+                    limit=self.settings.recall_top_k,
+                )
+            except Exception:  # noqa: BLE001 - recall must not block a reply
+                logger.exception("could not recall snippets for %s/%s", channel, memory_thread_ts)
+                snippets = []
+
             request = PromptRequest(
                 channel_id=channel,
                 thread_ts=memory_thread_ts,
@@ -261,6 +274,7 @@ class Handlers:
                 include_speaker_names=self.settings.include_speaker_names,
                 now=self.clock(),
                 facts=facts,
+                snippets=snippets,
             )
             try:
                 prompt = await build(request, self.store, self._budget)

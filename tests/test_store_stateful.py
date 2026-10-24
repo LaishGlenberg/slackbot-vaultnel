@@ -93,6 +93,16 @@ class StoreMachine(stateful.RuleBasedStateMachine):
         self._ids[key].append(saved.id)
 
     @stateful.rule(
+        key=st.sampled_from(KEYS),
+        text=st.sampled_from(["needle", "haystack", "other words"]),
+    )
+    def append_recallable(self, key, text):
+        thread = self._open(key)
+        saved = self._run(self._store.append_message(thread.id, Turn("user", text, 2)))
+        self._contents[key].append(text)
+        self._ids[key].append(saved.id)
+
+    @stateful.rule(
         channel=st.sampled_from(["C1", "C2"]),
         thread_ts=st.sampled_from(["1.0", "2.0"]),
         fold=st.integers(min_value=1, max_value=3),
@@ -193,6 +203,25 @@ class StoreMachine(stateful.RuleBasedStateMachine):
             stored = self._run(self._store.facts(scope, scope_key))
             assert [fact.content for fact in stored] == contents
             assert len({fact.content_hash for fact in stored}) == len(stored)
+
+    @stateful.invariant()
+    def recall_only_returns_live_rows_outside_the_current_thread(self):
+        for channel, thread_ts in self._opened:
+            matches = self._run(
+                self._store.search_messages(
+                    channel_id=channel,
+                    terms=["needle", "haystack", "other"],
+                    exclude_thread_ts=thread_ts,
+                    limit=5,
+                )
+            )
+            for match in matches:
+                hit = (match.channel_id, match.thread_ts)
+                assert match.channel_id == channel
+                assert hit != (channel, thread_ts)
+                assert not self._archived[hit], f"archived thread {hit} leaked into recall"
+                visible = self._contents[hit][self._hidden_until[hit] :]
+                assert match.content in visible
 
 
 @pytest.fixture(params=["memory", "sqlite"])

@@ -20,10 +20,11 @@ ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair),
 `slack/app.py` + `__main__.py` (ack-first lazy listeners, socket lifecycle),
 `memory/writer.py` (single write queue + rolling compaction, bad-summary
 guardrails), `memory/facts.py` (strict JSON parse, scope keys, dedupe, caps,
-prompt retrieval), `llm/prompts.py`, `/ask forget me`.
-230 tests green; the bot connects and answers live.
-Next slice: FTS5 snippet recall — same-channel BM25, exclude the current
-thread, pass snippets into `PromptRequest`.
+prompt retrieval), `memory/recall.py` (FTS query shaping + snippet mapping),
+`history/schema.sql` (FTS5 external-content index + triggers), `llm/prompts.py`,
+`/ask forget me`.
+258 tests green; the bot connects and answers live.
+Next slice: reset — archive flow, thread TTL, remaining `/ask` commands.
 
 ## Commands
 

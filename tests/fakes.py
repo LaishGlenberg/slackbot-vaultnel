@@ -7,10 +7,24 @@ tests use it, so it is held to the same contract suite as SqliteStore.
 from __future__ import annotations
 
 import asyncio
+import math
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-from slackbot_vaultnel.history.store import StoredFact, Thread, Turn, fact_content_hash
+from slackbot_vaultnel.history.store import (
+    MessageMatch,
+    StoredFact,
+    Thread,
+    Turn,
+    fact_content_hash,
+)
+
+_WORD_RE = re.compile(r"[a-z0-9_]+")
+
+
+def _search_tokens(text: str) -> list[str]:
+    return _WORD_RE.findall(text.lower())
 
 
 def _now() -> datetime:
@@ -194,6 +208,71 @@ class InMemoryStore:
             self._facts.pop(fact.id, None)
             self._fact_keys.discard((fact.scope, fact.scope_key, fact.content_hash))
         return len(matching)
+
+    # -- keyword recall ----------------------------------------------------
+
+    async def search_messages(
+        self,
+        *,
+        channel_id: str,
+        terms,
+        exclude_thread_ts: str | None = None,
+        limit: int = 3,
+    ) -> list[MessageMatch]:
+        wanted = {term.lower() for term in terms if term}
+        if limit <= 0 or not wanted:
+            return []
+
+        candidates: list[tuple[MessageMatch, int, list[str]]] = []
+        for thread in self._threads.values():
+            if thread.channel_id != channel_id:
+                continue
+            if exclude_thread_ts is not None and thread.thread_ts == exclude_thread_ts:
+                continue
+            if thread.archived:
+                continue
+            hidden = self._archived_messages[thread.id]
+            for message in self._messages[thread.id]:
+                if message.id in hidden or message.role not in ("user", "assistant"):
+                    continue
+                tokens = _search_tokens(message.content)
+                candidates.append(
+                    (
+                        MessageMatch(
+                            content=message.content,
+                            role=message.role,
+                            channel_id=thread.channel_id,
+                            thread_ts=thread.thread_ts,
+                            slack_user=message.slack_user,
+                            display_name=message.display_name,
+                            created_at=message.created_at,
+                        ),
+                        message.id,
+                        tokens,
+                    )
+                )
+
+        # A compact stand-in for BM25: rare terms count more, repeated (but not
+        # repeated many times) terms count a little more, newest wins on a tie.
+        total = len(candidates)
+        document_frequency = {
+            term: sum(1 for _, _, tokens in candidates if term in tokens) for term in wanted
+        }
+        scored: list[tuple[float, int, MessageMatch]] = []
+        for match, message_id, tokens in candidates:
+            score = 0.0
+            for term in wanted:
+                frequency = tokens.count(term)
+                if not frequency:
+                    continue
+                common = document_frequency[term]
+                inverse = math.log(1 + (total - common + 0.5) / (common + 0.5))
+                score += min(frequency, 3) * inverse
+            if score > 0:
+                scored.append((score, message_id, match))
+
+        scored.sort(key=lambda entry: (-entry[0], -entry[1]))
+        return [match for _, _, match in scored[:limit]]
 
 
 @dataclass(frozen=True)

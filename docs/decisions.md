@@ -135,3 +135,18 @@ scope; the cap evicts oldest first, while prompt retrieval reads newest first.
 `/ask forget me` flushes the writer queue first, then performs the real
 user-scope delete, so a pending extraction cannot re-add a fact the user just
 asked to forget.
+
+## 2026-10 — Recall: FTS5 external content, ranked by the store
+
+`messages_fts` is an external-content FTS5 table over `messages`, maintained by
+triggers, so message text is stored once and the index can always be rebuilt
+from source. `PRAGMA user_version` gates a one-time rebuild for databases
+created before the index existed; no migration framework is warranted at this
+size.
+
+`memory/recall.py` shapes the query (lowercased, stopword-free, de-duplicated,
+capped at 12 terms, OR-ed as quoted strings) because raw message text must never
+reach FTS as syntax. `Store.search_messages` owns the ranking: same channel,
+current thread excluded, archived threads and rows invisible, BM25 order. User
+and assistant turns are both recallable; assistant hits are labelled "Vaultnel".
+Recall failure is caught in the handler and never blocks a reply.

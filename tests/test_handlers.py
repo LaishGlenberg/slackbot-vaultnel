@@ -14,7 +14,7 @@ import pytest
 from fakes import FakeSlackClient, InMemoryStore, ManualClock, ScriptedLLM
 
 from slackbot_vaultnel.config import Settings
-from slackbot_vaultnel.history.store import StoredFact
+from slackbot_vaultnel.history.store import StoredFact, Turn
 from slackbot_vaultnel.llm.client import AuthError
 from slackbot_vaultnel.memory.facts import WORKSPACE_KEY
 from slackbot_vaultnel.memory.writer import MemoryWriter
@@ -242,6 +242,34 @@ async def test_facts_extracted_after_one_turn_reach_the_next_prompt():
 
     system = "\n".join(m["content"] for m in llm.calls[1] if m["role"] == "system")
     assert "Prefers TypeScript" in system
+
+
+async def test_recalled_snippets_from_other_threads_reach_the_prompt():
+    handlers, _, store, llm = make()
+    other = await store.get_or_create_thread(CHANNEL, "1700000000.000900")
+    await store.append_message(
+        other.id, Turn("user", "we settled on wal mode for sqlite", 8, display_name="Bob")
+    )
+
+    await handlers.handle_event(
+        mention(f"<@{BOT}> what did we settle on about wal mode?"), event_id="e1"
+    )
+
+    system = "\n".join(m["content"] for m in llm.calls[0] if m["role"] == "system")
+    assert "Relevant messages from other conversations" in system
+    assert "we settled on wal mode for sqlite" in system
+
+
+async def test_recall_failure_does_not_block_a_reply():
+    class FailingRecallStore(InMemoryStore):
+        async def search_messages(self, **kwargs):
+            raise RuntimeError("fts is down")
+
+    handlers, slack, _, _ = make(store=FailingRecallStore())
+
+    assert await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
+
+    assert visible(slack) == "the answer"
 
 
 async def test_speaker_names_are_resolved_when_enabled():

@@ -192,13 +192,23 @@ call returning strict JSON:
 **Snippet recall** answers "what did we settle on X last week?" without loading
 old threads:
 
-1. FTS5 `MATCH` on the current message text, scoped to the same channel.
-2. Exclude the current thread's short-term window (already in the prompt).
-3. Top `RECALL_TOP_K` (3) by BM25, each clipped to ~200 tokens.
+1. The current message becomes up to 12 lowercased, de-duplicated, stopword-free
+   terms, OR-ed together as quoted strings so nothing is read as FTS syntax.
+2. FTS5 `MATCH` runs against `messages_fts`, an external-content index over
+   `messages` kept current by insert/update/delete triggers. Archived threads and
+   archived rows are invisible.
+3. Results are scoped to the same channel and exclude the current thread (it is
+   already in the short-term window).
+4. Top `RECALL_TOP_K` (3) by BM25, each clipped to ~200 tokens by prompt assembly.
+
+User and assistant turns are both recallable, so settled answers are not lost;
+assistant snippets are labelled "Vaultnel". Older databases rebuild the index
+once on startup (`PRAGMA user_version` migration), and raw messages stay the
+source of truth.
 
 SQLite 3.45 with FTS5 is present in this environment (verified); `sqlite-vec`
 is not, so v1 is keyword retrieval only. Embeddings are a v2 upgrade behind the
-same interface.
+same interface (`Store.search_messages`).
 
 ### 5.4 Prompt assembly
 
@@ -489,8 +499,8 @@ handlers      app_mention, message.im, /ask, reset                  [done]
 wiring        __main__ + real socket  ->  bot usable in Slack here [done]
 compaction    rolling summary + writer + guardrails                 [done]
 extraction    facts: parse, dedupe, caps                            [done]
-recall        FTS snippet retrieval                                 [next]
-reset         archive flow, TTL, /ask commands
+recall        FTS snippet retrieval                                 [done]
+reset         archive flow, TTL, /ask commands                      [next]
 deploy        Dockerfile + host
 ```
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +22,8 @@ import aiosqlite
 Role = Literal["user", "assistant", "system"]
 FactScope = Literal["user", "channel", "workspace"]
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+#: Bumped whenever the on-disk index needs rebuilding from the content tables.
+FTS_SCHEMA_VERSION = 1
 
 
 def utcnow() -> datetime:
@@ -68,6 +70,19 @@ class Thread:
     updated_at: datetime = field(default_factory=utcnow)
 
 
+@dataclass(frozen=True)
+class MessageMatch:
+    """One keyword-recall hit, already ranked best-first by the store."""
+
+    content: str
+    role: Role
+    channel_id: str
+    thread_ts: str
+    slack_user: str | None = None
+    display_name: str | None = None
+    created_at: datetime | None = None
+
+
 class Store(Protocol):
     async def open(self) -> None: ...
 
@@ -112,6 +127,22 @@ class Store(Protocol):
 
     async def delete_facts(self, scope: FactScope, scope_key: str) -> int: ...
 
+    async def search_messages(
+        self,
+        *,
+        channel_id: str,
+        terms: Sequence[str],
+        exclude_thread_ts: str | None = None,
+        limit: int = 3,
+    ) -> list[MessageMatch]:
+        """Keyword recall across other live threads in one channel.
+
+        Results are best-match first. Archived threads and archived messages are
+        invisible, and the caller's own thread is excluded because it is already
+        in the short-term window.
+        """
+        ...
+
 
 class SqliteStore:
     def __init__(self, path: str | Path, *, clock: Callable[[], datetime] = utcnow) -> None:
@@ -127,6 +158,7 @@ class SqliteStore:
         conn = await aiosqlite.connect(self._path)
         conn.row_factory = aiosqlite.Row
         await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        await _migrate(conn)
         await conn.commit()
         self._conn = conn
 
@@ -348,6 +380,42 @@ class SqliteStore:
         await cursor.close()
         return int(row[0])
 
+    # -- keyword recall ----------------------------------------------------
+
+    async def search_messages(
+        self,
+        *,
+        channel_id: str,
+        terms: Sequence[str],
+        exclude_thread_ts: str | None = None,
+        limit: int = 3,
+    ) -> list[MessageMatch]:
+        match = _match_expression(terms)
+        if limit <= 0 or not match:
+            return []
+        exclude = "" if exclude_thread_ts is None else " AND t.thread_ts <> ?"
+        params: tuple[object, ...] = (match, channel_id)
+        if exclude_thread_ts is not None:
+            params += (exclude_thread_ts,)
+        sql = (
+            "SELECT m.content, m.role, m.slack_user, m.display_name, m.created_at,"
+            " t.channel_id, t.thread_ts"
+            " FROM messages_fts"
+            " JOIN messages m ON m.id = messages_fts.rowid"
+            " JOIN threads t ON t.id = m.thread_id"
+            " WHERE messages_fts MATCH ?"
+            " AND t.channel_id = ?"
+            " AND t.archived = 0 AND m.archived = 0"
+            " AND m.role IN ('user', 'assistant')"
+            f"{exclude}"
+            " ORDER BY bm25(messages_fts), m.id DESC"
+            " LIMIT ?"
+        )
+        cursor = await self._db.execute(sql, (*params, limit))
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [_to_match(row) for row in rows]
+
     # -- watermarks --------------------------------------------------------
 
     async def set_summary(self, thread_id: int, summary: str, through_msg_id: int) -> Thread:
@@ -412,6 +480,25 @@ def _iso(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat()
 
 
+async def _migrate(conn: aiosqlite.Connection) -> None:
+    """Populate the full-text index for rows written before it existed."""
+
+    cursor = await conn.execute("PRAGMA user_version")
+    row = await cursor.fetchone()
+    await cursor.close()
+    version = int(row[0]) if row is not None else 0
+    if version < FTS_SCHEMA_VERSION:
+        await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+        await conn.execute(f"PRAGMA user_version = {FTS_SCHEMA_VERSION}")
+
+
+def _match_expression(terms: Sequence[str]) -> str:
+    """OR together quoted terms so nothing in a user message is read as syntax."""
+
+    quoted = [f'"{term.replace(chr(34), "")}"' for term in terms if term]
+    return " OR ".join(quoted)
+
+
 def _to_thread(row: aiosqlite.Row) -> Thread:
     return Thread(
         id=row["id"],
@@ -452,5 +539,17 @@ def _to_turn(row: aiosqlite.Row) -> Turn:
         slack_user=row["slack_user"],
         display_name=row["display_name"],
         model=row["model"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _to_match(row: aiosqlite.Row) -> MessageMatch:
+    return MessageMatch(
+        content=row["content"],
+        role=row["role"],
+        channel_id=row["channel_id"],
+        thread_ts=row["thread_ts"],
+        slack_user=row["slack_user"],
+        display_name=row["display_name"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )

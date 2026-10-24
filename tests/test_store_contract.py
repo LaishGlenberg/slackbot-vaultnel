@@ -293,3 +293,149 @@ async def test_delete_facts_removes_only_the_requested_scope_key(store):
 
 async def test_deleting_missing_facts_is_a_no_op(store):
     assert await store.delete_facts("user", "nobody") == 0
+
+
+# -- keyword recall ---------------------------------------------------------
+
+
+async def seed_thread(store, *contents, channel=CHANNEL, thread_ts=THREAD_TS, role="user"):
+    thread = await store.get_or_create_thread(channel, thread_ts)
+    return [await store.append_message(thread.id, turn(content, role=role)) for content in contents]
+
+
+async def test_recall_finds_terms_in_another_thread_of_the_same_channel(store):
+    await seed_thread(store, "we should use postgres")
+    await seed_thread(store, "we settled on wal mode", thread_ts="1700000000.000200")
+
+    [hit] = await store.search_messages(
+        channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS
+    )
+
+    assert hit.content == "we settled on wal mode"
+    assert hit.channel_id == CHANNEL
+    assert hit.thread_ts == "1700000000.000200"
+    assert hit.role == "user"
+    assert hit.created_at is not None
+
+
+async def test_recall_keeps_author_names(store):
+    await seed_thread(store, "we settled on wal mode", thread_ts="1700000000.000200")
+    thread = await store.get_thread(CHANNEL, "1700000000.000200")
+    await store.append_message(
+        thread.id, Turn("assistant", "wal mode it is", 4, display_name="Vaultnel")
+    )
+
+    hits = await store.search_messages(
+        channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS
+    )
+
+    assert sorted(hit.display_name or "" for hit in hits) == ["", "Vaultnel"]
+
+
+async def test_recall_ignores_other_channels(store):
+    await seed_thread(store, "wal mode elsewhere", channel="C9999999")
+
+    assert (
+        await store.search_messages(channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS)
+        == []
+    )
+
+
+async def test_recall_excludes_the_current_thread(store):
+    await seed_thread(store, "wal mode here")
+    await seed_thread(store, "wal mode there", thread_ts="1700000000.000200")
+
+    hits = await store.search_messages(
+        channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS
+    )
+
+    assert [hit.thread_ts for hit in hits] == ["1700000000.000200"]
+
+    # Without the exclusion the caller's own thread is visible to the store;
+    # prompt assembly is what hides it from the final prompt.
+    all_hits = await store.search_messages(channel_id=CHANNEL, terms=["wal"])
+    assert {hit.thread_ts for hit in all_hits} == {THREAD_TS, "1700000000.000200"}
+
+
+async def test_recall_hides_archived_threads(store):
+    await seed_thread(store, "wal mode never mind", thread_ts="1700000000.000200")
+    await store.archive_thread(CHANNEL, "1700000000.000200")
+
+    assert (
+        await store.search_messages(channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS)
+        == []
+    )
+
+
+async def test_recall_hides_archived_rows_after_a_thread_is_reopened(store):
+    await seed_thread(store, "wal mode before reset", thread_ts="1700000000.000200")
+    await store.archive_thread(CHANNEL, "1700000000.000200")
+    reopened = await store.get_or_create_thread(CHANNEL, "1700000000.000200")
+    await store.append_message(reopened.id, turn("wal mode after reset"))
+
+    hits = await store.search_messages(
+        channel_id=CHANNEL, terms=["wal", "reset"], exclude_thread_ts=THREAD_TS
+    )
+
+    assert [hit.content for hit in hits] == ["wal mode after reset"]
+
+
+async def test_recall_ranks_more_relevant_messages_first(store):
+    await seed_thread(store, "wal and bananas", thread_ts="1700000000.000200")
+    await seed_thread(store, "wal mode for sqlite", thread_ts="1700000000.000300")
+
+    hits = await store.search_messages(
+        channel_id=CHANNEL,
+        terms=["wal", "mode", "sqlite"],
+        exclude_thread_ts=THREAD_TS,
+        limit=1,
+    )
+
+    assert [hit.content for hit in hits] == ["wal mode for sqlite"]
+
+
+async def test_recall_respects_the_limit_and_empty_terms(store):
+    for index in range(3):
+        await seed_thread(store, f"wal mode note {index}", thread_ts=f"1700000000.00040{index}")
+
+    hits = await store.search_messages(
+        channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS, limit=2
+    )
+    assert len(hits) == 2
+
+    assert await store.search_messages(channel_id=CHANNEL, terms=[]) == []
+    assert (
+        await store.search_messages(
+            channel_id=CHANNEL, terms=["wal"], exclude_thread_ts=THREAD_TS, limit=0
+        )
+        == []
+    )
+
+
+async def test_reopening_an_old_database_rebuilds_the_recall_index(tmp_path):
+    import aiosqlite
+
+    path = tmp_path / "old.db"
+    store = SqliteStore(path)
+    await store.open()
+    thread = await store.get_or_create_thread(CHANNEL, THREAD_TS)
+    await store.append_message(thread.id, turn("wal mode survived the upgrade"))
+    await store.close()
+
+    # Simulate a database written before the FTS table existed.
+    conn = await aiosqlite.connect(path)
+    await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
+    await conn.execute("PRAGMA user_version = 0")
+    await conn.commit()
+    await conn.close()
+
+    reopened = SqliteStore(path)
+    await reopened.open()
+    try:
+        hits = await reopened.search_messages(
+            channel_id=CHANNEL, terms=["upgrade"], exclude_thread_ts="0000.0000"
+        )
+    finally:
+        await reopened.close()
+
+    assert [hit.content for hit in hits] == ["wal mode survived the upgrade"]
