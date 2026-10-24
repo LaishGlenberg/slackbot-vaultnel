@@ -1,13 +1,19 @@
 [project]
 name = "slackbot-vaultnel"
 version = "0.1.0"
-description = "Add your description here"
+description = "Slack AI assistant with tiered conversation memory"
 readme = "README.md"
 authors = [
     { name = "LaishGlenberg", email = "lglenbe1@asu.edu" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "openai>=3.37.0",
+    "pydantic-settings>=2.16.1",
+    "slack-bolt>=1.30.0",
+    "tiktoken>=0.14.0",
+]
 
 [project.scripts]
 slackbot-vaultnel = "slackbot_vaultnel:main"
@@ -15,3 +21,32 @@ slackbot-vaultnel = "slackbot_vaultnel:main"
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.9",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "respx>=0.23.1",
+    "ruff>=0.17.2",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: hits a real LLM or Slack; deselected by default",
+]
+
+[tool.coverage.run]
+source = ["slackbot_vaultnel"]
+omit = ["*/__main__.py", "*/slack/app.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
