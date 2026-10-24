@@ -13,38 +13,39 @@ GitHub push → Cloud Build → Artifact Registry :latest
 
 ## One-time GCP setup
 
-Set the same region here, in `cloudbuild.yaml` (`_REGION`) and when creating the
-repository. The defaults assume `us-west1`, a free-tier region for e2-micro.
+The image is pushed into the **existing** `gcloud-backend` Artifact Registry
+repository in `us-west2`, so there is nothing to create. The VM stays in
+`us-central1` (`us-central1-c`) because that is an e2-micro free-tier region —
+`us-west2` is not. The VM pulls the image across regions; only a real update
+transfers layers, so the egress is fractions of a cent per deploy.
+
+If you would rather keep the image in a dedicated repository, create one and
+set `_REPO` in `cloudbuild.yaml` (or on the trigger) to match:
 
 ```bash
 PROJECT=vaultnel
-REGION=us-west1
+REGION=us-west2
 gcloud config set project "$PROJECT"
 
 gcloud artifacts repositories create vaultnel \
   --repository-format=docker \
   --location="$REGION" \
   --description="Vaultnel bot images"
-
-# Cloud Build pushes images
-gcloud projects add-iam-policy-binding "$PROJECT" \
-  --member="serviceAccount:$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')@cloudbuild.gserviceaccount.com" \
-  --role=roles/artifactregistry.writer
-
-# The VM pulls images
-gcloud projects add-iam-policy-binding "$PROJECT" \
-  --member="serviceAccount:$(gcloud compute instances describe slackbot-e2-micro --zone=us-west1-b --format='value(serviceAccounts[0].email)')" \
-  --role=roles/artifactregistry.reader
 ```
+
+No IAM binding is needed in the same project: Cloud Build can push by default,
+and the VM's default service account (Editor + the default storage read-only
+scope) can pull. Only add `roles/artifactregistry.writer` /
+`roles/artifactregistry.reader` if the push or pull is denied.
 
 Then create a Cloud Build trigger: **Cloud Build → Triggers → Connect
 repository**, pick the GitHub repo, branch `^main$`, config file
-`cloudbuild.yaml`. If the VM is not in `us-west1`/`us-west1-b`, override
-`_REGION` in the trigger settings (and adjust the zone below).
+`cloudbuild.yaml`. An existing GitHub connection in the project can be reused —
+only the trigger is new, and no substitution overrides are required.
 
 ## One-time VM setup
 
-SSH in (`gcloud compute ssh slackbot-e2-micro --zone=us-west1-b`), then:
+SSH in (`gcloud compute ssh slackbot-e2-micro --zone=us-central1-c`), then:
 
 ```bash
 sudo apt-get update
@@ -65,7 +66,7 @@ sudo nano /opt/vaultnel/.env   # fill tokens + LLM_API_KEY
 Append the image reference to the same file:
 
 ```bash
-echo 'VAULTNEL_IMAGE=us-west1-docker.pkg.dev/vaultnel/vaultnel/vaultnel:latest' \
+echo 'VAULTNEL_IMAGE=us-west2-docker.pkg.dev/vaultnel/gcloud-backend/vaultnel:latest' \
   | sudo tee -a /opt/vaultnel/.env
 ```
 
@@ -101,8 +102,15 @@ and `heartbeat: process alive` every five minutes.
 ## VM sizing notes
 
 `e2-micro` (1 GB) is enough for the bot itself. Builds happen in Cloud Build, so
-the VM never compiles anything. Add a swap file if you plan to run other things
-on the box:
+the VM never compiles anything. The 10 GB boot disk is tight once Docker and one
+or two images are on it — resizing to 20 GB is online and cheap:
+
+```bash
+gcloud compute disks resize slackbot-e2-micro --size=20GB --zone=us-central1-c
+# then on the VM: sudo growpart /dev/sda 1 && sudo resize2fs /dev/sda1
+```
+
+Add a swap file if you plan to run other things on the box:
 
 ```bash
 sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile

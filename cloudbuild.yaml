@@ -1,12 +1,20 @@
 # Cloud Build: build the bot image on every push to main, then let the VM
 # pick it up (see deploy/README.md). The VM polls :latest every five minutes.
+#
+# Images go into the existing `gcloud-backend` Artifact Registry repository in
+# us-west2 (see deploy/README.md), so no new repository is needed. The VM sits
+# in us-central1 (e2-micro free tier) and pulls across regions; layers only
+# transfer on a real update, so the inter-region egress is negligible.
 substitutions:
-  _REGION: us-west1
-  _REPO: vaultnel
+  _REGION: us-west2
+  _REPO: gcloud-backend
   _IMAGE: vaultnel
 
 steps:
   - name: gcr.io/cloud-builders/docker
+    # The Dockerfile uses `RUN --mount=type=cache`, which needs BuildKit.
+    env:
+      - DOCKER_BUILDKIT=1
     args:
       - build
       - -t
@@ -31,3 +39,5 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s
