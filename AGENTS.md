@@ -11,6 +11,13 @@ conversation memory in SQLite. Python 3.12, uv, asyncio.
 - Slack app definition: `slack/manifest.yaml`.
 - Env template: `.env.example` (never commit `.env`).
 
+## Status
+
+Done: config, token budgeting, store (+stateful machine), LLM client,
+thinking-level control. 115 tests green.
+Next slice: `memory/context.py` — `PromptRequest`, tier selection, budget
+ceilings (spec §5.4, §10). Then renderer, handlers, wiring (spec §12).
+
 ## Commands
 
 ```bash
