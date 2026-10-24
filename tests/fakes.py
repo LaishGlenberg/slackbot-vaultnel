@@ -444,3 +444,32 @@ class ScriptedLLM:
         else:
             text = self.replies[min(len(self.completion_calls) - 1, len(self.replies) - 1)]
         return Completion(text=text, model="fake", tokens_in=1, tokens_out=1)
+
+
+class ScriptedTurnLLM(ScriptedLLM):
+    """LLM fake whose turns are either text or a list of ``ToolCall``s.
+
+    ``stream_turn`` pops one scripted turn per call so a test can assert the
+    exact conversation the agent built: text, tool request, final answer.
+    """
+
+    def __init__(self, *turns, **kwargs) -> None:
+        from slackbot_vaultnel.llm.client import ToolCall
+
+        super().__init__(**kwargs)
+        self.turns: list[object] = list(turns)
+        self.turn_calls: list[tuple[list[dict], list | None]] = []
+        self.tool_call_type = ToolCall
+
+    def stream_turn(self, messages, *, tools=None, model=None, max_tokens=None, temperature=None):
+        return self._stream_turn(list(messages), tools)
+
+    async def _stream_turn(self, messages, tools):
+        self.turn_calls.append((messages, tools))
+        turn = self.turns.pop(0) if self.turns else ""
+        if isinstance(turn, str):
+            for char in turn:
+                yield char
+        else:
+            for item in turn:
+                yield item

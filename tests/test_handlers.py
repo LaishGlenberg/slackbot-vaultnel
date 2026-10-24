@@ -46,6 +46,7 @@ def make(
     slack: FakeSlackClient | None = None,
     store=None,
     writer=None,
+    tooling=None,
     **settings_overrides: object,
 ):
     clock = clock or ManualClock()
@@ -60,6 +61,7 @@ def make(
         bot_user_id=BOT,
         clock=clock.now,
         writer=writer,
+        tooling=tooling,
     )
     return handlers, slack, store, llm
 
@@ -623,3 +625,85 @@ async def test_ask_reset_clears_the_channel_slash_memory():
     thread = await store.get_thread(CHANNEL, f"slash-{CHANNEL}")
     assert thread is not None and thread.archived is True
     assert "cleared" in slack.ephemerals[0][2].lower()
+
+
+# -- MCP tools through the reply pipeline -------------------------------------
+
+
+class FakeCaller:
+    def __init__(self, text: str = "check: failure") -> None:
+        self.text = text
+        self.calls: list[tuple[str, str, dict]] = []
+
+    async def __call__(self, tool, arguments):
+        from slackbot_vaultnel.integrations.mcp import MCPResult
+
+        self.calls.append((tool.server, tool.tool, dict(arguments)))
+        return MCPResult(text=self.text)
+
+
+def tooling(*names: str, caller=None, server: str = "github"):
+    from slackbot_vaultnel.integrations.mcp import MCPTool
+    from slackbot_vaultnel.integrations.tools import build_tools
+    from slackbot_vaultnel.llm.agent import Tooling
+
+    tools = build_tools(
+        [
+            MCPTool(
+                server=server,
+                name=name,
+                description=name,
+                input_schema={"type": "object", "properties": {}},
+            )
+            for name in names
+        ]
+    )
+    return Tooling(tools=tools, call=caller or FakeCaller())
+
+
+async def test_tools_are_offered_and_their_result_reaches_the_slack_reply():
+    from fakes import ScriptedTurnLLM
+
+    from slackbot_vaultnel.llm.client import ToolCall
+
+    caller = FakeCaller("failure: test_tokens")
+    llm = ScriptedTurnLLM(
+        [ToolCall(id="c1", name="github__get_check_runs", arguments='{"ref": "41"}')],
+        "CI fails on the token budget test.",
+    )
+    handlers, slack, store, _ = make(llm=llm, tooling=tooling("get_check_runs", caller=caller))
+
+    await handlers.handle_event(mention(f"<@{BOT}> why is CI red on 41?"), event_id="tool-1")
+
+    assert strip_status(slack.texts[slack.posts[0].ts]) == "CI fails on the token budget test."
+    assert caller.calls == [("github", "get_check_runs", {"ref": "41"})]
+    assert llm.turn_calls[0][1] is not None
+    assert llm.turn_calls[0][1][0]["function"]["name"] == "github__get_check_runs"
+
+
+async def test_the_persisted_answer_is_the_final_text_not_the_tool_chatter():
+    from fakes import ScriptedTurnLLM
+
+    from slackbot_vaultnel.llm.client import ToolCall
+
+    llm = ScriptedTurnLLM(
+        ["Checking. ", ToolCall(id="c1", name="github__get_issue", arguments="{}")],
+        "It is still open.",
+    )
+    handlers, slack, store, _ = make(llm=llm, tooling=tooling("get_issue"))
+
+    await handlers.handle_event(mention(f"<@{BOT}> is it open?"), event_id="tool-2")
+
+    thread = await store.get_thread(CHANNEL, ROOT_TS)
+    messages = await store.messages(thread.id)
+    assistant = [m for m in messages if m.role == "assistant"]
+    assert assistant[-1].content == "Checking. It is still open."
+
+
+async def test_an_empty_tool_catalogue_falls_back_to_the_plain_stream():
+    handlers, slack, store, llm = make(reply="plain", tooling=tooling())
+
+    await handlers.handle_event(mention(f"<@{BOT}> hi"), event_id="tool-3")
+
+    assert strip_status(slack.texts[slack.posts[0].ts]) == "plain"
+    assert llm.calls, "the plain stream path should have been used"

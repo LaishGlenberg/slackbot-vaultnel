@@ -12,6 +12,9 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
 from slackbot_vaultnel.config import ConfigError, Settings, load_settings
 from slackbot_vaultnel.history.store import SqliteStore, utcnow
+from slackbot_vaultnel.integrations.mcp import HttpMCPClient, MCPError
+from slackbot_vaultnel.integrations.tools import build_tools
+from slackbot_vaultnel.llm.agent import Tooling
 from slackbot_vaultnel.llm.client import OpenAICompatClient
 from slackbot_vaultnel.memory.writer import MemoryWriter
 from slackbot_vaultnel.slack.app import create_app, register_handlers
@@ -34,12 +37,14 @@ async def run() -> int:
     llm = _build_llm(settings)
     writer = MemoryWriter(store=store, llm=llm, settings=settings, clock=utcnow)
     await writer.start()
+    mcp = HttpMCPClient(settings.mcp_servers, timeout=settings.mcp_timeout_seconds)
     try:
         app = create_app(settings)
         auth = await app.client.auth_test()
         bot_user_id = _string(auth.get("user_id"))
         logger.info("authenticated as %s (%s)", auth.get("user"), bot_user_id)
 
+        tooling = await _discover_tools(mcp, settings)
         handlers = Handlers(
             client=app.client,
             store=store,
@@ -49,6 +54,7 @@ async def run() -> int:
             clock=utcnow,
             llm_semaphore=asyncio.Semaphore(settings.max_concurrent_llm),
             writer=writer,
+            tooling=tooling,
         )
         register_handlers(app, handlers)
 
@@ -62,9 +68,28 @@ async def run() -> int:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
     finally:
+        await mcp.aclose()
         await writer.stop()
         await store.close()
     return 0
+
+
+async def _discover_tools(mcp: HttpMCPClient, settings: Settings) -> Tooling | None:
+    """One discovery pass at startup; a dead integration never blocks the bot."""
+
+    if not settings.mcp_servers:
+        return None
+    try:
+        discovered = await mcp.list_tools()
+    except MCPError as exc:
+        logger.warning("MCP integrations unavailable, continuing without tools: %s", exc)
+        return None
+    if not discovered:
+        logger.info("MCP configured but no tools matched the allowlists")
+        return None
+    tools = build_tools(discovered)
+    logger.info("MCP tools available: %s", ", ".join(tool.name for tool in tools))
+    return Tooling(tools=tools, call=mcp.call_tool)
 
 
 def _build_llm(settings: Settings) -> OpenAICompatClient:

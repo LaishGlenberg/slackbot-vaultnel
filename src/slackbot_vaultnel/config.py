@@ -8,12 +8,24 @@ reading Python tracebacks.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are Vaultnel, a helpful assistant in a Slack workspace. "
@@ -70,6 +82,46 @@ PROVIDERS: dict[Provider, ProviderDefaults] = {
 }
 
 
+#: Server names become model-facing tool prefixes, so they must be a safe identifier.
+MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+class MCPServerConfig(BaseModel):
+    """One remote MCP server. Secrets are named, never inlined (spec §6)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str
+    token_env: str | None = None
+    tools: tuple[str, ...] = ()
+
+    @field_validator("url")
+    @classmethod
+    def _absolute_https(cls, value: str) -> str:
+        parts = urlsplit(value.strip())
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise ValueError("must be an absolute http(s) URL")
+        if parts.scheme == "http" and parts.hostname not in _LOCAL_HOSTS:
+            raise ValueError("must use https (http is allowed for localhost only)")
+        return value.strip()
+
+    @field_validator("token_env")
+    @classmethod
+    def _env_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _ENV_NAME_RE.match(value):
+            raise ValueError("token_env must name an environment variable, not a token")
+        return value
+
+    @field_validator("tools")
+    @classmethod
+    def _clean_tools(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(name.strip() for name in value if name.strip())
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=None,
@@ -111,11 +163,41 @@ class Settings(BaseSettings):
     thread_ttl_hours: float = Field(default=72.0, gt=0)
     memory_queue_max: int = Field(default=100, ge=1)
 
+    # Integrations (MCP): JSON object of {name: {url, token_env?, tools?}}
+    mcp_servers: Annotated[dict[str, MCPServerConfig], NoDecode] = Field(default_factory=dict)
+    mcp_rounds: int = Field(default=3, ge=1)
+    mcp_calls_per_turn: int = Field(default=4, ge=1)
+    mcp_result_tokens: int = Field(default=1200, ge=1)
+    mcp_timeout_seconds: float = Field(default=30.0, gt=0)
+
     # Runtime
     db_path: Path = Path("data/vaultnel.db")
     max_concurrent_llm: int = Field(default=4, ge=1)
     stream_interval: float = Field(default=1.0, ge=0.3)
     log_level: str = "INFO"
+
+    @field_validator("mcp_servers", mode="before")
+    @classmethod
+    def _parse_mcp_servers(cls, value: object) -> object:
+        """`MCP_SERVERS` is JSON; a blank value means no integrations."""
+
+        if isinstance(value, str):
+            if not value.strip():
+                return {}
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"must be a JSON object ({exc.msg} at position {exc.pos})"
+                ) from None
+        if isinstance(value, dict):
+            for name in value:
+                if not isinstance(name, str) or not MCP_SERVER_NAME_RE.match(name):
+                    raise ValueError(
+                        f"server name {name!r} must match {MCP_SERVER_NAME_RE.pattern} "
+                        "(it becomes a tool name prefix)"
+                    )
+        return value
 
     @field_validator(
         "llm_model",

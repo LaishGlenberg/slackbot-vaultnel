@@ -257,3 +257,83 @@ def test_unknown_thinking_level_is_rejected(minimal_env, monkeypatch):
         load_settings(env_file=None)
 
     assert "THINKING_LEVEL" in str(exc.value)
+
+
+# -- MCP servers (integrations) ------------------------------------------------
+
+
+def test_no_mcp_servers_configured_by_default(minimal_env):
+    assert load_settings(env_file=None).mcp_servers == {}
+
+
+def test_mcp_servers_parse_from_json_env(minimal_env, monkeypatch):
+    monkeypatch.setenv(
+        "MCP_SERVERS",
+        json.dumps(
+            {
+                "github": {
+                    "url": "https://api.githubcopilot.com/mcp/",
+                    "token_env": "GITHUB_TOKEN",
+                    "tools": ["get_pull_request", "list_pull_requests"],
+                }
+            }
+        ),
+    )
+
+    server = load_settings(env_file=None).mcp_servers["github"]
+
+    assert server.url == "https://api.githubcopilot.com/mcp/"
+    assert server.token_env == "GITHUB_TOKEN"
+    assert server.tools == ("get_pull_request", "list_pull_requests")
+
+
+def test_blank_mcp_servers_means_none(minimal_env, monkeypatch):
+    monkeypatch.setenv("MCP_SERVERS", "")
+
+    assert load_settings(env_file=None).mcp_servers == {}
+
+
+def test_invalid_mcp_json_names_the_env_var(minimal_env, monkeypatch):
+    monkeypatch.setenv("MCP_SERVERS", "{not json")
+
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env_file=None)
+
+    assert "MCP_SERVERS" in str(exc.value)
+
+
+def test_plain_http_mcp_url_is_rejected_outside_localhost(minimal_env, monkeypatch):
+    monkeypatch.setenv("MCP_SERVERS", json.dumps({"github": {"url": "http://api.example.com/mcp"}}))
+
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env_file=None)
+
+    assert "MCP_SERVERS" in str(exc.value)
+
+
+def test_localhost_mcp_url_may_use_http(minimal_env, monkeypatch):
+    monkeypatch.setenv("MCP_SERVERS", json.dumps({"local": {"url": "http://127.0.0.1:8765/mcp"}}))
+
+    assert load_settings(env_file=None).mcp_servers["local"].url == "http://127.0.0.1:8765/mcp"
+
+
+@pytest.mark.parametrize("name", ["git hub", "git/hub", "", "x" * 40])
+def test_mcp_server_names_must_be_tool_safe(minimal_env, monkeypatch, name):
+    monkeypatch.setenv("MCP_SERVERS", json.dumps({name: {"url": "https://api.example.com/mcp"}}))
+
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env_file=None)
+
+    assert "MCP_SERVERS" in str(exc.value)
+
+
+def test_unknown_mcp_server_field_is_rejected(minimal_env, monkeypatch):
+    monkeypatch.setenv(
+        "MCP_SERVERS",
+        json.dumps({"github": {"url": "https://api.example.com/mcp", "token": "leak"}}),
+    )
+
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env_file=None)
+
+    assert "MCP_SERVERS" in str(exc.value)
