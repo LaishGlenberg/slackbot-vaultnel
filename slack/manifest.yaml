@@ -1,0 +1,42 @@
+# Slack app manifest for Vaultnel.
+# Create: https://api.slack.com/apps → Create New App → From an app manifest
+# Paste this file (YAML tab), pick your workspace, then install to workspace.
+#
+# Socket Mode means no request URLs are needed anywhere in this manifest.
+display_information:
+  name: Vaultnel
+  description: AI assistant that answers in DMs and threads.
+  background_color: "#1f2937"
+
+features:
+  bot_user:
+    display_name: vaultnel
+    always_online: true
+  slash_commands:
+    - command: /ask
+      description: Ask Vaultnel a question
+      usage_hint: "[question]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # see @mentions
+      - chat:write          # post / update messages
+      - commands            # /ask
+      - im:history          # read DM messages
+      - im:read
+      - im:write            # open DM, get DM channel id
+      - reactions:write     # :eyes: ack reaction
+      - users:read          # resolve user ids to names
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
