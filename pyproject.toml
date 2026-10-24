@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
+    "httpx2>=2.16.0",
     "openai>=3.37.0",
     "pydantic-settings>=2.16.1",
     "slack-bolt>=1.30.0",
@@ -28,7 +29,6 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "respx>=0.23.1",
     "ruff>=0.17.2",
 ]
 
@@ -42,7 +42,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["slackbot_vaultnel"]
-omit = ["*/__main__.py", "*/slack/app.py"]
+omit = ["*/__main__.py", "*/slack/app.py", "*/llm/cli.py"]
 
 [tool.ruff]
 line-length = 100

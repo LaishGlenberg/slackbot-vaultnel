@@ -209,3 +209,23 @@ def test_validation_error_type_is_not_leaked_to_callers(minimal_env):
         build(keep_recent_turns=0)
 
     assert not isinstance(exc.value, ValidationError)
+
+
+def test_blank_optional_values_are_treated_as_unset(minimal_env, monkeypatch):
+    """A .env template full of `KEY=` lines must behave like the key is absent."""
+
+    monkeypatch.setenv("SYSTEM_PROMPT_FILE", "")
+    monkeypatch.setenv("SYSTEM_PROMPT", "")
+    monkeypatch.setenv("LLM_MODEL", "")
+    monkeypatch.setenv("LLM_UTILITY_MODEL", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", "")
+
+    settings = load_settings(env_file=None)
+
+    assert settings.system_prompt_file is None
+    assert settings.llm_base_url is None
+    assert settings.resolved_model == "deepseek-chat"
+    assert settings.resolved_utility_model == "deepseek-chat"
+    assert settings.resolved_base_url == "https://api.deepseek.com"
+    assert settings.resolved_system_prompt == DEFAULT_SYSTEM_PROMPT

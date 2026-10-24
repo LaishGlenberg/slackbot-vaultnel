@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, SecretStr, ValidationError, model_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
     # Persona
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT
+    system_prompt: str | None = None
     system_prompt_file: Path | None = None
     include_speaker_names: bool = True
 
@@ -95,6 +95,22 @@ class Settings(BaseSettings):
     max_concurrent_llm: int = Field(default=4, ge=1)
     stream_interval: float = Field(default=1.0, ge=0.3)
     log_level: str = "INFO"
+
+    @field_validator(
+        "llm_model",
+        "llm_utility_model",
+        "llm_base_url",
+        "system_prompt",
+        "system_prompt_file",
+        mode="before",
+    )
+    @classmethod
+    def _blank_means_unset(cls, value: object) -> object:
+        """`KEY=` in a .env template must behave like the key being absent."""
+
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _check_budget_headroom(self) -> Settings:
@@ -124,14 +140,15 @@ class Settings(BaseSettings):
 
     @property
     def resolved_system_prompt(self) -> str:
-        if self.system_prompt_file is None:
-            return self.system_prompt
-        try:
-            return self.system_prompt_file.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise ConfigError(
-                f"SYSTEM_PROMPT_FILE could not be read: {self.system_prompt_file} ({exc.strerror})"
-            ) from None
+        if self.system_prompt_file is not None:
+            try:
+                return self.system_prompt_file.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise ConfigError(
+                    "SYSTEM_PROMPT_FILE could not be read: "
+                    f"{self.system_prompt_file} ({exc.strerror})"
+                ) from None
+        return self.system_prompt or DEFAULT_SYSTEM_PROMPT
 
     def ensure_db_dir(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

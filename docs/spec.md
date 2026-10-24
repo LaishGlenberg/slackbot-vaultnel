@@ -274,6 +274,11 @@ each token).
 | deepseek | `https://api.deepseek.com` | `deepseek-chat` |
 | openrouter | `https://openrouter.ai/api/v1` | `deepseek/deepseek-chat` |
 
+DeepSeek currently answers to `deepseek-chat` but reports the underlying model
+as `deepseek-flash`, and `reasoner` aliases still exist yet spend their
+`max_tokens` on reasoning before emitting content. The bot therefore stays on
+`deepseek-chat` for both replies and utility calls.
+
 Both are OpenAI-compatible, so one `openai`-SDK code path serves both and
 switching is env-only. Models that reject `temperature` (reasoner family) have
 the param dropped rather than failing the call.
@@ -378,7 +383,7 @@ Everything below runs offline; no Slack, no LLM, no sleeps.
 | `memory/context` | fake store, fake clock | budget ceilings respected, tier ordering, exclusions |
 | compaction | scripted LLM returning canned summaries | trigger thresholds, high-water mark, bad-summary guard |
 | fact extraction | scripted LLM, malformed JSON cases | dedupe, caps, scope validation, silent failure |
-| `llm/client` | `respx` | URL/model/auth/params, delta assembly, reasoner param drop |
+| `llm/client` | injected `httpx2` MockTransport | URL/model/auth/params, delta assembly, retry/backoff, reasoner param drop |
 | `slack/render` | fake client + fake clock | chunk boundaries, fence repair, throttle cadence |
 | `slack/handlers` | fake client, `InMemoryStore`, `ScriptedLLM` | mention stripping, thread targeting, ignored subtypes, no double reply |
 | live smoke | `@pytest.mark.slow` | one real round trip, skipped without `LLM_API_KEY` |
