@@ -104,6 +104,15 @@ and `heartbeat: process alive` every five minutes.
 - **Restart**: `sudo systemctl restart docker` or let `update.sh` recreate it.
 - **Rollback**: pin `VAULTNEL_IMAGE` in `/opt/vaultnel/.env` to an older
   `:<commit-sha>` tag, run `update.sh`, then switch back to `:latest` when ready.
+  The tag is re-pulled from the registry, so no local copy is needed.
+- **Disk**: `update.sh` keeps exactly one image (prunes before and after the
+  pull) and logs `disk: …` each time. Old `:$COMMIT_SHA` tags accumulate in the
+  registry, not on the VM; cap them with a cleanup policy:
+
+  ```bash
+  gcloud artifacts repositories set-cleanup-policies vaultnel --location=us-west2 \
+    --policy=keep-minimum-versions=10
+  ```
 - **Database**: the `vaultnel-data` Docker volume holds
   `/data/vaultnel.db`; it survives image updates. Snapshot the disk before
   schema changes you do not trust.
@@ -111,8 +120,8 @@ and `heartbeat: process alive` every five minutes.
 ## VM sizing notes
 
 `e2-micro` (1 GB) is enough for the bot itself. Builds happen in Cloud Build, so
-the VM never compiles anything. The 10 GB boot disk is tight once Docker and one
-or two images are on it — resizing to 20 GB is online and cheap:
+the VM never compiles anything. One image plus Docker fits comfortably in the
+10 GB boot disk, but resizing is online and cheap if you ever need it:
 
 ```bash
 gcloud compute disks resize slackbot-e2-micro --size=20GB --zone=us-central1-c
