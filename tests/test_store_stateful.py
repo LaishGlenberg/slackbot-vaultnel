@@ -18,7 +18,7 @@ from hypothesis import settings as hyp_settings
 from hypothesis import stateful
 from hypothesis import strategies as st
 
-from slackbot_vaultnel.history.store import SqliteStore, Turn
+from slackbot_vaultnel.history.store import SqliteStore, StoredFact, Turn
 
 KEEP_RECENT = 2
 KEYS = [("C1", "1.0"), ("C1", "2.0"), ("C2", "1.0")]
@@ -41,6 +41,7 @@ class StoreMachine(stateful.RuleBasedStateMachine):
         self._extracted: dict[tuple[str, str], int] = {}
         self._archived: dict[tuple[str, str], bool] = {}
         self._hidden_until: dict[tuple[str, str], int] = {}
+        self._facts: dict[tuple[str, str], list[str]] = {}
 
     # -- plumbing ----------------------------------------------------------
 
@@ -125,6 +126,18 @@ class StoreMachine(stateful.RuleBasedStateMachine):
         self._run(self._store.mark_extracted(thread.id, self._ids[key][start + count - 1]))
         self._extracted[key] = start + count
 
+    @stateful.rule(
+        scope=st.sampled_from(["user", "channel", "workspace"]),
+        scope_key=st.sampled_from(["U1", "C1", "*"]),
+        content=st.text(min_size=1, max_size=20),
+    )
+    def add_fact(self, scope, scope_key, content):
+        inserted = self._run(
+            self._store.add_fact(StoredFact(scope=scope, scope_key=scope_key, content=content))
+        )
+        if inserted:
+            self._facts.setdefault((scope, scope_key), []).append(content)
+
     @stateful.rule(key=st.sampled_from(KEYS))
     def archive(self, key):
         self._open(key)
@@ -173,6 +186,13 @@ class StoreMachine(stateful.RuleBasedStateMachine):
         for key in self._opened:
             thread = self._thread(key)
             assert self._run(self._store.message_count(thread.id)) == len(self._contents[key])
+
+    @stateful.invariant()
+    def facts_match_the_model_without_duplicates(self):
+        for (scope, scope_key), contents in self._facts.items():
+            stored = self._run(self._store.facts(scope, scope_key))
+            assert [fact.content for fact in stored] == contents
+            assert len({fact.content_hash for fact in stored}) == len(stored)
 
 
 @pytest.fixture(params=["memory", "sqlite"])

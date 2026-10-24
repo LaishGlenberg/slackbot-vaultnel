@@ -174,11 +174,18 @@ call returning strict JSON:
 ```
 
 - `scope` is `user` (about the person), `channel` (about the project/team), or
-  `workspace`. Anything else is dropped.
+  `workspace`. The model never supplies scope keys: `user` is the latest speaker
+  in the window, `channel` is the thread's channel, and `workspace` is one
+  shared bucket (the bot is single-workspace in v1). Anything else is dropped.
+- Extraction fires once at least four assistant turns have accumulated above
+  `last_extracted_msg_id`. Valid JSON (including `[]`) advances the watermark;
+  invalid JSON or a failed call leaves it in place and retries on a later turn.
+- Facts are one-liners: content is whitespace-normalized, clipped past 240
+  characters, and dropped beyond 3× that length.
 - Facts are deduped by a normalized-content hash, capped at
   `FACT_MAX_PER_SCOPE` (100) per scope, oldest-evicted first.
-- Malformed JSON, unknown scope, or a 3×-too-long fact → drop that entry, keep
-  the rest, log at debug. Extraction failure never affects the reply.
+- Unknown scope or an unusable entry → drop that entry, keep the rest, log at
+  debug. Extraction failure never affects the reply.
 - A fact already contradicted by a newer fact is left to the model to weigh —
   no contradiction detection in v1.
 
@@ -227,16 +234,16 @@ touching prompt assembly.
 
 All memory mutations go through one background `MemoryWriter` consuming an
 `asyncio.Queue`. Single writer means no sqlite write contention and no locks
-around SQL. Queue is bounded (`MEMORY_QUEUE_MAX=100`); on overflow the oldest
-low-priority job (fact extraction) is dropped before a persist job. Persist
-jobs are never dropped: with no extraction jobs queued, a full queue applies
-backpressure to the enqueueing handler instead.
+around SQL. Queue is bounded (`MEMORY_QUEUE_MAX=100`). Fact extraction is low
+priority: when the queue is full the extraction job is dropped and retried on
+a later turn. Persist jobs are never dropped — they apply backpressure to the
+enqueueing handler instead.
 
 ### 5.6 Reset
 
 | Action | Effect |
 | --- | --- |
-| 🗑️ reaction on any bot message, or `/ask reset` | thread archived: `messages.archived=1`, summary cleared, thread-scoped facts deleted; user/channel facts survive |
+| 🗑️ reaction on any bot message, or `/ask reset` | thread archived: `messages.archived=1`, summary cleared; facts are not thread-scoped in v1, so user/channel/workspace facts survive |
 | `/ask forget me` | user-scoped facts deleted for the requester |
 | Thread idle > `THREAD_TTL_HOURS` (72) | summary+window skipped (treated as fresh), recall still works — automatic, no user action |
 | `vaultnel recompact` | rebuild a summary from raw messages |
@@ -481,8 +488,8 @@ render        chunking, throttle, fence repair                      [done]
 handlers      app_mention, message.im, /ask, reset                  [done]
 wiring        __main__ + real socket  ->  bot usable in Slack here [done]
 compaction    rolling summary + writer + guardrails                 [done]
-extraction    facts: parse, dedupe, caps                            [next]
-recall        FTS snippet retrieval
+extraction    facts: parse, dedupe, caps                            [done]
+recall        FTS snippet retrieval                                 [next]
 reset         archive flow, TTL, /ask commands
 deploy        Dockerfile + host
 ```

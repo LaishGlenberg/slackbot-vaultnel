@@ -19,10 +19,11 @@ ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair),
 `slack/handlers.py` (filter/dedupe, thread locks, replies, persistence),
 `slack/app.py` + `__main__.py` (ack-first lazy listeners, socket lifecycle),
 `memory/writer.py` (single write queue + rolling compaction, bad-summary
-guardrails), `llm/prompts.py`.
-195 tests green; the bot connects and answers live.
-Next slice: fact extraction — strict JSON parse, scope validation, dedupe, caps,
-`/ask forget me`.
+guardrails), `memory/facts.py` (strict JSON parse, scope keys, dedupe, caps,
+prompt retrieval), `llm/prompts.py`, `/ask forget me`.
+230 tests green; the bot connects and answers live.
+Next slice: FTS5 snippet recall — same-channel BM25, exclude the current
+thread, pass snippets into `PromptRequest`.
 
 ## Commands
 

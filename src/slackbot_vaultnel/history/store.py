@@ -9,6 +9,8 @@ idempotent thread identity, and nothing else. Everything policy-shaped lives in
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -18,6 +20,7 @@ from typing import Literal, Protocol
 import aiosqlite
 
 Role = Literal["user", "assistant", "system"]
+FactScope = Literal["user", "channel", "workspace"]
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -36,6 +39,19 @@ class Turn:
     display_name: str | None = None
     model: str | None = None
     id: int = 0
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class StoredFact:
+    """A durable long-term memory. ``id`` is 0 until it is persisted."""
+
+    scope: FactScope
+    scope_key: str
+    content: str
+    source_msg_id: int | None = None
+    id: int = 0
+    content_hash: str = ""
     created_at: datetime | None = None
 
 
@@ -83,6 +99,18 @@ class Store(Protocol):
     async def mark_extracted(self, thread_id: int, through_msg_id: int) -> Thread: ...
 
     async def archive_thread(self, channel_id: str, thread_ts: str) -> Thread: ...
+
+    async def add_fact(self, fact: StoredFact) -> bool:
+        """Insert unless an equivalent fact exists. Returns whether it was new."""
+        ...
+
+    async def facts(self, scope: FactScope, scope_key: str) -> list[StoredFact]: ...
+
+    async def trim_facts(self, scope: FactScope, scope_key: str, keep: int) -> int:
+        """Drop the oldest facts past ``keep``; returns how many were removed."""
+        ...
+
+    async def delete_facts(self, scope: FactScope, scope_key: str) -> int: ...
 
 
 class SqliteStore:
@@ -192,6 +220,64 @@ class SqliteStore:
             )
             await self._db.commit()
             return replace(thread, archived=True, updated_at=now)
+
+    # -- facts -------------------------------------------------------------
+
+    async def add_fact(self, fact: StoredFact) -> bool:
+        async with self._write_lock:
+            now = self._clock()
+            cursor = await self._db.execute(
+                "INSERT OR IGNORE INTO facts"
+                " (scope, scope_key, content, content_hash, source_msg_id, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    fact.scope,
+                    fact.scope_key,
+                    fact.content,
+                    fact_content_hash(fact.scope, fact.content),
+                    fact.source_msg_id,
+                    _iso(now),
+                ),
+            )
+            inserted = cursor.rowcount > 0
+            await cursor.close()
+            await self._db.commit()
+            return inserted
+
+    async def facts(self, scope: FactScope, scope_key: str) -> list[StoredFact]:
+        cursor = await self._db.execute(
+            "SELECT * FROM facts WHERE scope = ? AND scope_key = ? ORDER BY id ASC",
+            (scope, scope_key),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [_to_fact(row) for row in rows]
+
+    async def trim_facts(self, scope: FactScope, scope_key: str, keep: int) -> int:
+        if keep < 0:
+            raise ValueError("keep must be >= 0")
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                "DELETE FROM facts WHERE id IN ("
+                " SELECT id FROM facts WHERE scope = ? AND scope_key = ?"
+                " ORDER BY id DESC LIMIT -1 OFFSET ?)",
+                (scope, scope_key, keep),
+            )
+            removed = cursor.rowcount
+            await cursor.close()
+            await self._db.commit()
+            return max(removed, 0)
+
+    async def delete_facts(self, scope: FactScope, scope_key: str) -> int:
+        async with self._write_lock:
+            cursor = await self._db.execute(
+                "DELETE FROM facts WHERE scope = ? AND scope_key = ?",
+                (scope, scope_key),
+            )
+            removed = cursor.rowcount
+            await cursor.close()
+            await self._db.commit()
+            return max(removed, 0)
 
     # -- messages ----------------------------------------------------------
 
@@ -338,6 +424,23 @@ def _to_thread(row: aiosqlite.Row) -> Thread:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
+
+
+def _to_fact(row: aiosqlite.Row) -> StoredFact:
+    return StoredFact(
+        id=row["id"],
+        scope=row["scope"],
+        scope_key=row["scope_key"],
+        content=row["content"],
+        content_hash=row["content_hash"],
+        source_msg_id=row["source_msg_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def fact_content_hash(scope: str, content: str) -> str:
+    normalized = re.sub(r"\s+", " ", content).strip().lower()
+    return hashlib.sha256(f"{scope}{normalized}".encode()).hexdigest()
 
 
 def _to_turn(row: aiosqlite.Row) -> Turn:

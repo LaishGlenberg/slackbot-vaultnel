@@ -10,7 +10,7 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-from slackbot_vaultnel.history.store import Thread, Turn
+from slackbot_vaultnel.history.store import StoredFact, Thread, Turn, fact_content_hash
 
 
 def _now() -> datetime:
@@ -24,8 +24,11 @@ class InMemoryStore:
         self._by_key: dict[tuple[str, str], int] = {}
         self._messages: dict[int, list[Turn]] = {}
         self._archived_messages: dict[int, set[int]] = {}
+        self._facts: dict[int, StoredFact] = {}
+        self._fact_keys: set[tuple[str, str, str]] = set()
         self._next_thread_id = 1
         self._next_message_id = 1
+        self._next_fact_id = 1
 
     async def open(self) -> None:
         return None
@@ -147,6 +150,50 @@ class InMemoryStore:
         updated = replace(thread, archived=True, updated_at=self._clock())
         self._threads[thread.id] = updated
         return updated
+
+    # -- facts -------------------------------------------------------------
+
+    async def add_fact(self, fact: StoredFact) -> bool:
+        content_hash = fact_content_hash(fact.scope, fact.content)
+        key = (fact.scope, fact.scope_key, content_hash)
+        if key in self._fact_keys:
+            return False
+        self._fact_keys.add(key)
+        self._facts[self._next_fact_id] = replace(
+            fact,
+            id=self._next_fact_id,
+            content_hash=content_hash,
+            created_at=self._clock(),
+        )
+        self._next_fact_id += 1
+        return True
+
+    async def facts(self, scope: str, scope_key: str) -> list[StoredFact]:
+        return sorted(
+            (
+                fact
+                for fact in self._facts.values()
+                if fact.scope == scope and fact.scope_key == scope_key
+            ),
+            key=lambda fact: fact.id,
+        )
+
+    async def trim_facts(self, scope: str, scope_key: str, keep: int) -> int:
+        if keep < 0:
+            raise ValueError("keep must be >= 0")
+        matching = await self.facts(scope, scope_key)
+        removed = matching[: max(len(matching) - keep, 0)]
+        for fact in removed:
+            self._facts.pop(fact.id, None)
+            self._fact_keys.discard((fact.scope, fact.scope_key, fact.content_hash))
+        return len(removed)
+
+    async def delete_facts(self, scope: str, scope_key: str) -> int:
+        matching = await self.facts(scope, scope_key)
+        for fact in matching:
+            self._facts.pop(fact.id, None)
+            self._fact_keys.discard((fact.scope, fact.scope_key, fact.content_hash))
+        return len(matching)
 
 
 @dataclass(frozen=True)

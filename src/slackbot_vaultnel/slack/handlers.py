@@ -33,6 +33,7 @@ from slackbot_vaultnel.config import Settings
 from slackbot_vaultnel.history.store import Store, Thread, Turn, utcnow
 from slackbot_vaultnel.llm.client import AuthError, LLMError, RateLimited
 from slackbot_vaultnel.memory.context import PromptBudget, PromptRequest, build
+from slackbot_vaultnel.memory.facts import facts_for_prompt
 from slackbot_vaultnel.memory.tokens import count_tokens
 from slackbot_vaultnel.memory.writer import DirectTurnWriter, TurnWriter
 from slackbot_vaultnel.slack.render import Renderer, SlackReplyClient
@@ -132,9 +133,21 @@ class Handlers:
             return
 
         if lowered == "forget me":
-            # Long-term facts arrive with the extraction slice; nothing to
-            # delete before then, but the command is part of the contract.
-            await self._ephemeral(channel, user, "No facts about you are stored yet.")
+            try:
+                # Let queued extraction finish first, so it cannot re-add what we delete.
+                await self.writer.flush()
+                removed = await self.store.delete_facts("user", user)
+            except Exception:  # noqa: BLE001
+                logger.exception("could not delete user facts for %s", user)
+                await self._ephemeral(
+                    channel, user, "I couldn't delete your facts; the details are in the logs."
+                )
+                return
+            if removed:
+                noun = "fact" if removed == 1 else "facts"
+                await self._ephemeral(channel, user, f"Deleted {removed} {noun} about you.")
+            else:
+                await self._ephemeral(channel, user, "No facts about you are stored.")
             return
 
         if not text:
@@ -232,6 +245,12 @@ class Handlers:
             await self._react(channel, ack_ts, "eyes", add=True)
 
         async with self._thread_lock(channel, memory_thread_ts):
+            try:
+                facts = await facts_for_prompt(self.store, channel_id=channel, user_id=user)
+            except Exception:  # noqa: BLE001 - missing memory must not block a reply
+                logger.exception("could not load facts for %s/%s", channel, memory_thread_ts)
+                facts = []
+
             request = PromptRequest(
                 channel_id=channel,
                 thread_ts=memory_thread_ts,
@@ -241,6 +260,7 @@ class Handlers:
                 persona=self.settings.resolved_system_prompt,
                 include_speaker_names=self.settings.include_speaker_names,
                 now=self.clock(),
+                facts=facts,
             )
             try:
                 prompt = await build(request, self.store, self._budget)

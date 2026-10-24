@@ -1,7 +1,7 @@
 import pytest
 from fakes import InMemoryStore
 
-from slackbot_vaultnel.history.store import SqliteStore, Turn
+from slackbot_vaultnel.history.store import SqliteStore, StoredFact, Turn
 
 
 @pytest.fixture(params=["memory", "sqlite"])
@@ -215,3 +215,81 @@ async def test_thread_lookup_of_unknown_key_returns_none(store):
 async def test_archiving_an_unknown_thread_fails(store):
     with pytest.raises(ValueError, match="thread"):
         await store.archive_thread(CHANNEL, "does-not-exist")
+
+
+# -- facts ------------------------------------------------------------------
+
+
+def fact(content="ships on Fly.io", *, scope="channel", scope_key=CHANNEL):
+    return StoredFact(scope=scope, scope_key=scope_key, content=content)
+
+
+async def test_facts_are_stored_with_a_hash_and_timestamp(store):
+    inserted = await store.add_fact(fact("Ships on Fly.io with sqlite"))
+
+    assert inserted is True
+    [saved] = await store.facts("channel", CHANNEL)
+    assert saved.id > 0
+    assert saved.content == "Ships on Fly.io with sqlite"
+    assert saved.content_hash
+    assert saved.created_at is not None
+
+
+async def test_duplicate_facts_are_ignored_after_normalizing_case_and_space(store):
+    assert await store.add_fact(fact("Ships on   Fly.io")) is True
+    assert await store.add_fact(fact("ships on fly.io")) is False
+
+    assert len(await store.facts("channel", CHANNEL)) == 1
+
+
+async def test_the_same_fact_can_exist_in_different_scopes_or_keys(store):
+    assert await store.add_fact(fact("TypeScript", scope="user", scope_key="U1")) is True
+    assert await store.add_fact(fact("TypeScript", scope="user", scope_key="U2")) is True
+    assert await store.add_fact(fact("TypeScript", scope="channel", scope_key=CHANNEL)) is True
+
+    assert len(await store.facts("user", "U1")) == 1
+    assert len(await store.facts("user", "U2")) == 1
+    assert len(await store.facts("channel", CHANNEL)) == 1
+
+
+async def test_facts_are_returned_oldest_first(store):
+    for content in ("one", "two", "three"):
+        await store.add_fact(fact(content))
+
+    assert [f.content for f in await store.facts("channel", CHANNEL)] == ["one", "two", "three"]
+
+
+async def test_trim_facts_evicts_the_oldest_entries(store):
+    for content in ("one", "two", "three", "four"):
+        await store.add_fact(fact(content))
+
+    removed = await store.trim_facts("channel", CHANNEL, 2)
+
+    assert removed == 2
+    assert [f.content for f in await store.facts("channel", CHANNEL)] == ["three", "four"]
+
+
+async def test_trim_facts_only_touches_one_scope_key(store):
+    await store.add_fact(fact("one"))
+    await store.add_fact(fact("two"))
+    await store.add_fact(fact("keep", scope="user", scope_key="U1"))
+
+    assert await store.trim_facts("channel", CHANNEL, 1) == 1
+    assert [f.content for f in await store.facts("user", "U1")] == ["keep"]
+
+
+async def test_delete_facts_removes_only_the_requested_scope_key(store):
+    await store.add_fact(fact("mine", scope="user", scope_key="U1"))
+    await store.add_fact(fact("theirs", scope="user", scope_key="U2"))
+    await store.add_fact(fact("project", scope="channel", scope_key=CHANNEL))
+
+    deleted = await store.delete_facts("user", "U1")
+
+    assert deleted == 1
+    assert await store.facts("user", "U1") == []
+    assert len(await store.facts("user", "U2")) == 1
+    assert len(await store.facts("channel", CHANNEL)) == 1
+
+
+async def test_deleting_missing_facts_is_a_no_op(store):
+    assert await store.delete_facts("user", "nobody") == 0

@@ -8,12 +8,16 @@ says, and what ended up in thread memory.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from fakes import FakeSlackClient, InMemoryStore, ManualClock, ScriptedLLM
 
 from slackbot_vaultnel.config import Settings
+from slackbot_vaultnel.history.store import StoredFact
 from slackbot_vaultnel.llm.client import AuthError
+from slackbot_vaultnel.memory.facts import WORKSPACE_KEY
+from slackbot_vaultnel.memory.writer import MemoryWriter
 from slackbot_vaultnel.slack.handlers import Handlers
 from slackbot_vaultnel.slack.render import strip_status
 
@@ -189,6 +193,55 @@ async def test_second_turn_sees_the_first_turn_in_the_prompt():
     assert "my name is Ada" in contents
     assert "Your name is Ada." in contents
     assert second_prompt[-1]["content"] == "what is my name?"
+
+
+async def test_scoped_facts_are_injected_into_the_prompt():
+    clock = ManualClock()
+    store = InMemoryStore(clock=clock.now)
+    await store.add_fact(StoredFact("user", USER, "Prefers TypeScript"))
+    await store.add_fact(StoredFact("channel", CHANNEL, "Ships on Fly.io"))
+    await store.add_fact(StoredFact("workspace", WORKSPACE_KEY, "Four-day week"))
+    handlers, _, _, llm = make(clock=clock, store=store)
+
+    await handlers.handle_event(mention(f"<@{BOT}> what do you know?"), event_id="e1")
+
+    system = "\n".join(m["content"] for m in llm.calls[0] if m["role"] == "system")
+    assert "Prefers TypeScript" in system
+    assert "Ships on Fly.io" in system
+    assert "Four-day week" in system
+
+
+async def test_facts_extracted_after_one_turn_reach_the_next_prompt():
+    clock = ManualClock()
+    store = InMemoryStore(clock=clock.now)
+    config = settings(fact_extraction_every=1)
+    llm = ScriptedLLM(
+        "noted",
+        completions=[json.dumps([{"content": "Prefers TypeScript", "scope": "user"}])],
+    )
+    writer = MemoryWriter(store=store, llm=llm, settings=config, clock=clock.now)
+    await writer.start()
+    try:
+        handlers = Handlers(
+            client=FakeSlackClient(clock=clock),
+            store=store,
+            llm=llm,
+            settings=config,
+            bot_user_id=BOT,
+            clock=clock.now,
+            writer=writer,
+        )
+        await handlers.handle_event(mention(f"<@{BOT}> I like TypeScript"), event_id="e1")
+        await writer.flush()
+        await handlers.handle_event(
+            mention(f"<@{BOT}> what do you know?", ts="1700000000.000200", thread_ts=ROOT_TS),
+            event_id="e2",
+        )
+    finally:
+        await writer.stop()
+
+    system = "\n".join(m["content"] for m in llm.calls[1] if m["role"] == "system")
+    assert "Prefers TypeScript" in system
 
 
 async def test_speaker_names_are_resolved_when_enabled():
@@ -408,6 +461,33 @@ async def test_ask_reset_without_a_thread_says_nothing_was_stored():
 
     assert len(slack.ephemerals) == 1
     assert "no thread memory" in slack.ephemerals[0][2].lower()
+
+
+async def test_ask_forget_me_deletes_only_that_users_facts():
+    store = InMemoryStore()
+    await store.add_fact(StoredFact("user", USER, "Prefers TypeScript"))
+    await store.add_fact(StoredFact("user", "U999", "Prefers Go"))
+    await store.add_fact(StoredFact("channel", CHANNEL, "Ships on Fly.io"))
+    handlers, slack, _, _ = make(store=store)
+
+    await handlers.handle_ask(
+        {"command": "/ask", "text": "forget me", "channel_id": CHANNEL, "user_id": USER}
+    )
+
+    assert await store.facts("user", USER) == []
+    assert len(await store.facts("user", "U999")) == 1
+    assert len(await store.facts("channel", CHANNEL)) == 1
+    assert "Deleted 1 fact" in slack.ephemerals[0][2]
+
+
+async def test_ask_forget_me_with_nothing_stored_says_so():
+    handlers, slack, _, _ = make()
+
+    await handlers.handle_ask(
+        {"command": "/ask", "text": "forget me", "channel_id": CHANNEL, "user_id": USER}
+    )
+
+    assert "No facts" in slack.ephemerals[0][2]
 
 
 async def test_ask_reset_clears_the_channel_slash_memory():

@@ -118,3 +118,20 @@ summarises the rest together with the previous summary. Empty, oversized
 (>1.5× cap) or failed summaries are rejected and retried on the next turn; the
 watermark never moves backwards. A thread archived by reset is skipped, so an
 in-flight reply cannot resurrect it.
+
+## 2026-10 — Facts: model chooses content, code chooses scope key
+
+The extractor returns only `{"content", "scope"}`. Scope keys are assigned by
+code (latest speaker / channel / single workspace bucket), so a model cannot
+attach a fact to the wrong user or channel. Extraction is a low-priority queue
+job: if the queue is full it is dropped and retried later, never delaying a
+persist.
+
+A valid JSON array — including `[]` — advances `last_extracted_msg_id`, so an
+empty result is not re-asked forever. Invalid JSON or a failed call leaves the
+watermark alone and retries on a later turn. Facts are whitespace-normalized,
+clipped past 240 characters (dropped past 720), deduped by hash and capped per
+scope; the cap evicts oldest first, while prompt retrieval reads newest first.
+`/ask forget me` flushes the writer queue first, then performs the real
+user-scope delete, so a pending extraction cannot re-add a fact the user just
+asked to forget.

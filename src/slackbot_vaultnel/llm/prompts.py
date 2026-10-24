@@ -11,6 +11,19 @@ from collections.abc import Sequence
 
 from slackbot_vaultnel.history.store import Turn
 
+EXTRACTION_SYSTEM = (
+    "You extract durable facts from Slack conversations. "
+    "Return ONLY a JSON array. Each item must look like "
+    '{"content": "one sentence", "scope": "user"|"channel"|"workspace"}. '
+    "Use user for stable details or preferences about the speaker, channel for "
+    "project decisions, constraints and team context, and workspace for "
+    "org-wide rules. Skip opinions, pleasantries, restatements and anything "
+    "that will be stale tomorrow. Return [] when nothing is worth keeping."
+)
+
+#: Fact extraction is a utility call; a large reply is itself a bad sign.
+FACT_EXTRACTION_MAX_TOKENS = 512
+
 SUMMARY_SYSTEM = (
     "You maintain a compact rolling summary of a Slack conversation. "
     "Keep decisions, constraints, names, numbers, and open questions. "
@@ -35,6 +48,17 @@ def build_summary_messages(
                 f"Older turns to fold in:\n{body}\n\n"
                 "Return the updated summary."
             ),
+        },
+    ]
+
+
+def build_extraction_messages(turns: Sequence[Turn]) -> list[dict[str, str]]:
+    body = "\n".join(_format_turn(turn) for turn in turns)
+    return [
+        {"role": "system", "content": EXTRACTION_SYSTEM},
+        {
+            "role": "user",
+            "content": f"Conversation turns:\n{body}\n\nReturn the JSON array.",
         },
     ]
 

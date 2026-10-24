@@ -29,3 +29,15 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
+
+CREATE TABLE IF NOT EXISTS facts (
+    id            INTEGER PRIMARY KEY,
+    scope         TEXT NOT NULL CHECK (scope IN ('user', 'channel', 'workspace')),
+    scope_key     TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    content_hash  TEXT NOT NULL,
+    source_msg_id INTEGER,
+    created_at    TEXT NOT NULL,
+    UNIQUE (scope, scope_key, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(scope, scope_key);

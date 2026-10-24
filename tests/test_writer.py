@@ -8,11 +8,14 @@ failed must leave the previous one in place and be retried on the next turn.
 
 from __future__ import annotations
 
+import json
+
 from fakes import InMemoryStore, ManualClock, ScriptedLLM
 
 from slackbot_vaultnel.config import Settings
 from slackbot_vaultnel.history.store import Thread, Turn
 from slackbot_vaultnel.llm.client import LLMError
+from slackbot_vaultnel.memory.facts import WORKSPACE_KEY
 from slackbot_vaultnel.memory.writer import MemoryWriter
 
 CHANNEL = "C0123456"
@@ -32,8 +35,14 @@ def settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def turn(content: str, *, role: str = "user", tokens: int = 6) -> Turn:
-    return Turn(role=role, content=content, tokens=tokens)
+def turn(
+    content: str,
+    *,
+    role: str = "user",
+    tokens: int = 6,
+    slack_user: str | None = None,
+) -> Turn:
+    return Turn(role=role, content=content, tokens=tokens, slack_user=slack_user)
 
 
 class Harness:
@@ -60,6 +69,9 @@ class Harness:
 
     async def record(self, thread: Thread, *turns: Turn) -> None:
         await self.writer.record(thread, turns)
+
+    async def flush(self) -> None:
+        await self.writer.flush()
 
 
 async def test_record_persists_turns_in_order_without_compacting_below_the_trigger():
@@ -159,6 +171,117 @@ async def test_nothing_is_folded_when_every_turn_is_inside_the_recent_window():
 
         assert h.llm.completion_calls == []
         assert (await h.store.get_thread(CHANNEL, ROOT_TS)).summary == ""
+
+
+async def test_extraction_waits_for_four_assistant_turns_and_scopes_the_facts():
+    completion = json.dumps(
+        [
+            {"content": "Prefers TypeScript", "scope": "user"},
+            {"content": "Ships on Fly.io", "scope": "channel"},
+            {"content": "Four-day week", "scope": "workspace"},
+        ]
+    )
+    async with Harness(llm=ScriptedLLM(completions=[completion])) as h:
+        thread = await h.thread()
+        await h.record(
+            thread,
+            turn("hello", tokens=1, slack_user="U1"),
+            *(turn(f"answer {i}", role="assistant", tokens=1) for i in range(4)),
+        )
+        await h.flush()
+
+        assert [f.content for f in await h.store.facts("user", "U1")] == ["Prefers TypeScript"]
+        assert [f.content for f in await h.store.facts("channel", CHANNEL)] == ["Ships on Fly.io"]
+        assert [f.content for f in await h.store.facts("workspace", WORKSPACE_KEY)] == [
+            "Four-day week"
+        ]
+        fresh = await h.store.get_thread(CHANNEL, ROOT_TS)
+        assert fresh.last_extracted_msg_id == max(m.id for m in await h.store.messages(thread.id))
+        prompt = "\n".join(message["content"] for message in h.llm.completion_calls[0])
+        assert "answer 3" in prompt
+
+
+async def test_extraction_does_not_run_before_the_interval():
+    async with Harness(llm=ScriptedLLM(completions=["[]"])) as h:
+        thread = await h.thread()
+        await h.record(
+            thread,
+            turn("hello", tokens=1),
+            *(turn(f"answer {i}", role="assistant", tokens=1) for i in range(3)),
+        )
+        await h.flush()
+
+        assert h.llm.completion_calls == []
+        assert (await h.store.get_thread(CHANNEL, ROOT_TS)).last_extracted_msg_id == 0
+
+
+async def test_invalid_json_leaves_the_watermark_and_retries_later():
+    good = json.dumps([{"content": "Prefers TypeScript", "scope": "user"}])
+    async with Harness(llm=ScriptedLLM(completions=["{not json", good])) as h:
+        thread = await h.thread()
+        await h.record(
+            thread,
+            turn("hello", tokens=1, slack_user="U1"),
+            *(turn(f"answer {i}", role="assistant", tokens=1) for i in range(4)),
+        )
+        await h.flush()
+
+        assert (await h.store.get_thread(CHANNEL, ROOT_TS)).last_extracted_msg_id == 0
+        assert await h.store.facts("user", "U1") == []
+
+        await h.record(thread, turn("answer 4", role="assistant", tokens=1))
+        await h.flush()
+
+        assert (await h.store.get_thread(CHANNEL, ROOT_TS)).last_extracted_msg_id > 0
+        assert [f.content for f in await h.store.facts("user", "U1")] == ["Prefers TypeScript"]
+
+
+async def test_the_next_extraction_only_sees_turns_since_the_watermark():
+    async with Harness(llm=ScriptedLLM(completions=["[]", "[]"])) as h:
+        thread = await h.thread()
+        await h.record(
+            thread,
+            turn("hello", tokens=1),
+            *(turn(f"old answer {i}", role="assistant", tokens=1) for i in range(4)),
+        )
+        await h.flush()
+        await h.record(
+            thread,
+            *(turn(f"new answer {i}", role="assistant", tokens=1) for i in range(4)),
+        )
+        await h.flush()
+
+        second_prompt = "\n".join(message["content"] for message in h.llm.completion_calls[1])
+        assert "old answer 0" not in second_prompt
+        assert "new answer 3" in second_prompt
+
+
+async def test_extraction_failure_is_silent_and_retryable():
+    async with Harness(llm=ScriptedLLM(completion_error=LLMError("down"))) as h:
+        thread = await h.thread()
+        await h.record(
+            thread,
+            turn("hello", tokens=1),
+            *(turn(f"answer {i}", role="assistant", tokens=1) for i in range(4)),
+        )
+        await h.flush()
+
+        assert (await h.store.get_thread(CHANNEL, ROOT_TS)).last_extracted_msg_id == 0
+        assert await h.store.facts("channel", CHANNEL) == []
+
+
+async def test_an_empty_array_still_advances_the_watermark():
+    async with Harness(llm=ScriptedLLM(completions=["[]"])) as h:
+        thread = await h.thread()
+        await h.record(
+            thread,
+            turn("hello", tokens=1),
+            *(turn(f"answer {i}", role="assistant", tokens=1) for i in range(4)),
+        )
+        await h.flush()
+
+        assert (await h.store.get_thread(CHANNEL, ROOT_TS)).last_extracted_msg_id > 0
+        assert await h.store.facts("channel", CHANNEL) == []
 
 
 async def test_archived_threads_are_not_compacted_or_appended_to():
