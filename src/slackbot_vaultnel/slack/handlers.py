@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 MENTION_HINT = "Hi! Ask me a question after the mention, e.g. `@vaultnel how do I …`."
 ASK_USAGE = "Usage: `/ask <question>`, `/ask reset`, or `/ask forget me`."
 GENERIC_FAILURE = "Something went wrong while I was answering; the details are in the logs."
+#: 🗑️ on any bot message archives the thread it answered (spec §5.6).
+RESET_REACTION = "wastebasket"
 
 #: Enough to cover a Slack retry storm without growing without bound.
 SEEN_EVENTS_MAX = 1024
@@ -109,6 +111,8 @@ class Handlers:
             return await self._handle_mention(event)
         if kind == "message" and event.get("channel_type") == "im":
             return await self._handle_dm(event)
+        if kind == "reaction_added":
+            return await self._handle_reaction(event)
         return False
 
     async def handle_ask(self, command: Mapping[str, object]) -> None:
@@ -215,6 +219,33 @@ class Handlers:
         )
         return True
 
+    async def _handle_reaction(self, event: Mapping[str, object]) -> bool:
+        """🗑️ on a message we posted archives the thread it belongs to."""
+
+        if event.get("reaction") != RESET_REACTION:
+            return False
+        user = _text(event.get("user"))
+        if user and user == self.bot_user_id:
+            return False
+        item = event.get("item")
+        if not isinstance(item, Mapping) or item.get("type") != "message":
+            return False
+        channel = _text(item.get("channel"))
+        ts = _text(item.get("ts"))
+        if not channel or not ts:
+            return False
+
+        thread = await self.store.thread_for_bot_message(ts)
+        if thread is None or thread.channel_id != channel:
+            return False  # not a message we posted, or the mapping is gone
+        try:
+            await self.store.archive_thread(thread.channel_id, thread.thread_ts)
+        except ValueError:
+            logger.debug("reaction reset found no thread for %s/%s", channel, thread.thread_ts)
+            return False
+        logger.info("reset %s/%s via %s reaction", channel, thread.thread_ts, RESET_REACTION)
+        return True
+
     def _ignored(self, event: Mapping[str, object]) -> bool:
         if event.get("subtype") or event.get("bot_id"):
             return True
@@ -302,7 +333,9 @@ class Handlers:
                 clock=self.clock,
             )
             try:
-                await renderer.start()
+                started_at = await renderer.start()
+                # Link the placeholder early so a reaction during streaming resets this thread.
+                await self._link(thread, [started_at])
             except Exception:  # noqa: BLE001
                 logger.exception("could not post a placeholder to %s/%s", channel, memory_thread_ts)
                 await self._record(thread, [user_turn])
@@ -315,17 +348,20 @@ class Handlers:
                 result = await renderer.finish()
             except LLMError as exc:
                 logger.warning("model call failed for %s/%s: %s", channel, memory_thread_ts, exc)
-                await renderer.fail(_friendly_error(exc))
+                result = await renderer.fail(_friendly_error(exc))
+                await self._link(thread, result.chunk_ts)
                 await self._settle_reaction(channel, ack_ts, success=False)
                 await self._record(thread, [user_turn])
                 return
             except Exception:  # noqa: BLE001 - one bad reply must not kill the socket
                 logger.exception("unhandled reply failure for %s/%s", channel, memory_thread_ts)
-                await renderer.fail(GENERIC_FAILURE)
+                result = await renderer.fail(GENERIC_FAILURE)
+                await self._link(thread, result.chunk_ts)
                 await self._settle_reaction(channel, ack_ts, success=False)
                 await self._record(thread, [user_turn])
                 return
 
+            await self._link(thread, result.chunk_ts)
             if result.text.strip():
                 await self._settle_reaction(channel, ack_ts, success=True)
                 await self._record(
@@ -361,6 +397,14 @@ class Handlers:
                 yield
 
     # -- persistence -------------------------------------------------------
+
+    async def _link(self, thread: Thread, slack_ts: Sequence[str]) -> None:
+        if not slack_ts:
+            return
+        try:
+            await self.writer.link(thread, slack_ts)
+        except Exception:  # noqa: BLE001 - reaction reset is best-effort
+            logger.exception("could not remember bot messages in thread %s", thread.id)
 
     async def _record(self, thread: Thread, turns: Sequence[Turn]) -> None:
         try:

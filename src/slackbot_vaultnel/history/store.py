@@ -115,6 +115,12 @@ class Store(Protocol):
 
     async def archive_thread(self, channel_id: str, thread_ts: str) -> Thread: ...
 
+    async def link_bot_messages(self, thread_id: int, slack_ts: Sequence[str]) -> None:
+        """Remember which thread a bot message belongs to, so a reaction can reset it."""
+        ...
+
+    async def thread_for_bot_message(self, slack_ts: str) -> Thread | None: ...
+
     async def add_fact(self, fact: StoredFact) -> bool:
         """Insert unless an equivalent fact exists. Returns whether it was new."""
         ...
@@ -247,11 +253,34 @@ class SqliteStore:
                 (thread.id,),
             )
             await self._db.execute(
-                "UPDATE threads SET archived = 1, updated_at = ? WHERE id = ?",
+                "UPDATE threads SET archived = 1, summary = '', updated_at = ? WHERE id = ?",
                 (_iso(now), thread.id),
             )
             await self._db.commit()
-            return replace(thread, archived=True, updated_at=now)
+            return replace(thread, archived=True, summary="", updated_at=now)
+
+    # -- bot messages ------------------------------------------------------
+
+    async def link_bot_messages(self, thread_id: int, slack_ts: Sequence[str]) -> None:
+        async with self._write_lock:
+            await self._require_thread(thread_id)
+            now = self._clock()
+            await self._db.executemany(
+                "INSERT OR REPLACE INTO bot_messages (slack_ts, thread_id, created_at)"
+                " VALUES (?, ?, ?)",
+                [(ts, thread_id, _iso(now)) for ts in slack_ts if ts],
+            )
+            await self._db.commit()
+
+    async def thread_for_bot_message(self, slack_ts: str) -> Thread | None:
+        cursor = await self._db.execute(
+            "SELECT t.* FROM bot_messages b JOIN threads t ON t.id = b.thread_id"
+            " WHERE b.slack_ts = ?",
+            (slack_ts,),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        return _to_thread(row) if row is not None else None
 
     # -- facts -------------------------------------------------------------
 

@@ -439,3 +439,44 @@ async def test_reopening_an_old_database_rebuilds_the_recall_index(tmp_path):
         await reopened.close()
 
     assert [hit.content for hit in hits] == ["wal mode survived the upgrade"]
+
+
+# -- reset plumbing ---------------------------------------------------------
+
+
+async def test_archiving_clears_the_summary(store):
+    thread = await store.get_or_create_thread(CHANNEL, THREAD_TS)
+    saved = await store.append_message(thread.id, turn())
+    await store.set_summary(thread.id, "old summary", saved.id)
+
+    archived = await store.archive_thread(CHANNEL, THREAD_TS)
+
+    assert archived.summary == ""
+    stored = await store.get_thread(CHANNEL, THREAD_TS)
+    assert stored is not None and stored.summary == ""
+
+
+async def test_bot_messages_map_back_to_their_thread(store):
+    thread = await store.get_or_create_thread(CHANNEL, THREAD_TS)
+
+    await store.link_bot_messages(thread.id, ["111.111", "222.222", ""])
+
+    found = await store.thread_for_bot_message("222.222")
+    assert found is not None and found.id == thread.id
+    assert await store.thread_for_bot_message("333.333") is None
+
+
+async def test_relinking_a_message_points_at_the_newest_thread(store):
+    first = await store.get_or_create_thread(CHANNEL, THREAD_TS)
+    second = await store.get_or_create_thread(CHANNEL, "1700000000.000200")
+
+    await store.link_bot_messages(first.id, ["111.111"])
+    await store.link_bot_messages(second.id, ["111.111"])
+
+    found = await store.thread_for_bot_message("111.111")
+    assert found is not None and found.id == second.id
+
+
+async def test_linking_a_message_to_an_unknown_thread_fails(store):
+    with pytest.raises(ValueError, match="thread"):
+        await store.link_bot_messages(999, ["111.111"])

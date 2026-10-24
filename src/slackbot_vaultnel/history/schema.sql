@@ -30,6 +30,17 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
 
+-- Maps a posted bot message (including every chunk of a long reply) back to the
+-- thread it answers, so a 🗑️ reaction can reset that thread. Slack timestamps
+-- are unique per workspace, hence the primary key.
+CREATE TABLE IF NOT EXISTS bot_messages (
+    slack_ts   TEXT PRIMARY KEY,
+    thread_id  INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_messages_thread ON bot_messages(thread_id);
+
 -- Keyword recall (spec §5.3). External content keeps the text in one place;
 -- the triggers below keep the index in step with ``messages``.
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

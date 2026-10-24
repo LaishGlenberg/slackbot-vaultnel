@@ -74,6 +74,9 @@ class RecordingWriter:
         for turn in turns:
             await self.store.append_message(thread.id, turn)
 
+    async def link(self, thread, slack_ts) -> None:
+        await self.store.link_bot_messages(thread.id, slack_ts)
+
 
 def mention(
     text: str,
@@ -387,6 +390,98 @@ async def test_reaction_failures_do_not_break_the_reply():
     assert await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
 
     assert visible(slack) == "the answer"
+
+
+# -- reset via reaction -----------------------------------------------------
+
+
+def reset_reaction(ts: str, *, name: str = "wastebasket", user: str = USER):
+    return {
+        "type": "reaction_added",
+        "user": user,
+        "reaction": name,
+        "item": {"type": "message", "channel": CHANNEL, "ts": ts},
+    }
+
+
+async def test_wastebasket_reaction_archives_the_thread():
+    handlers, slack, store, _ = make()
+    await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
+    bot_ts = slack.posts[0].ts
+
+    assert await handlers.handle_event(reset_reaction(bot_ts), event_id="r1")
+
+    thread = await store.get_thread(CHANNEL, ROOT_TS)
+    assert thread is not None and thread.archived is True
+    assert thread.summary == ""
+
+
+async def test_wastebasket_reaction_starts_a_fresh_context():
+    handlers, slack, store, llm = make()
+    await handlers.handle_event(mention(f"<@{BOT}> my codeword is pineapple"), event_id="e1")
+    await handlers.handle_event(reset_reaction(slack.posts[0].ts), event_id="r1")
+
+    await handlers.handle_event(
+        mention(f"<@{BOT}> what is the codeword?", ts="1700000000.000200", thread_ts=ROOT_TS),
+        event_id="e2",
+    )
+
+    prompt = "\n".join(m["content"] for m in llm.calls[1])
+    assert "pineapple" not in prompt
+    assert await stored_turns(store, ROOT_TS) == [
+        ("user", "my codeword is pineapple"),
+        ("assistant", "the answer"),
+        ("user", "what is the codeword?"),
+        ("assistant", "the answer"),
+    ]
+
+
+async def test_every_chunk_of_a_long_reply_can_be_reacted_to():
+    handlers, slack, store, _ = make(reply="a paragraph of words\n\n" * 300)
+    await handlers.handle_event(mention(f"<@{BOT}> tell me everything"), event_id="e1")
+    assert len(slack.posts) > 1
+
+    assert await handlers.handle_event(reset_reaction(slack.posts[-1].ts), event_id="r1")
+
+    thread = await store.get_thread(CHANNEL, ROOT_TS)
+    assert thread is not None and thread.archived is True
+
+
+async def test_reaction_on_someone_elses_message_is_ignored():
+    handlers, slack, store, _ = make()
+    await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
+
+    ignored = await handlers.handle_event(reset_reaction("1700000000.999999"), event_id="r1")
+
+    assert ignored is False
+    thread = await store.get_thread(CHANNEL, ROOT_TS)
+    assert thread is not None and thread.archived is False
+
+
+async def test_other_reactions_do_not_reset_the_thread():
+    handlers, slack, store, _ = make()
+    await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
+
+    ignored = await handlers.handle_event(
+        reset_reaction(slack.posts[0].ts, name="thumbsup"), event_id="r1"
+    )
+
+    assert ignored is False
+    thread = await store.get_thread(CHANNEL, ROOT_TS)
+    assert thread is not None and thread.archived is False
+
+
+async def test_the_bot_cannot_reset_its_own_thread_with_a_reaction():
+    handlers, slack, store, _ = make()
+    await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
+
+    ignored = await handlers.handle_event(
+        reset_reaction(slack.posts[0].ts, user=BOT), event_id="r1"
+    )
+
+    assert ignored is False
+    thread = await store.get_thread(CHANNEL, ROOT_TS)
+    assert thread is not None and thread.archived is False
 
 
 # -- failures ---------------------------------------------------------------

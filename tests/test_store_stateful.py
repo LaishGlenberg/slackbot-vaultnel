@@ -42,6 +42,7 @@ class StoreMachine(stateful.RuleBasedStateMachine):
         self._archived: dict[tuple[str, str], bool] = {}
         self._hidden_until: dict[tuple[str, str], int] = {}
         self._facts: dict[tuple[str, str], list[str]] = {}
+        self._links: dict[str, tuple[str, str]] = {}
 
     # -- plumbing ----------------------------------------------------------
 
@@ -153,7 +154,19 @@ class StoreMachine(stateful.RuleBasedStateMachine):
         self._open(key)
         self._run(self._store.archive_thread(*key))
         self._archived[key] = True
+        self._summary[key] = ""
         self._hidden_until[key] = len(self._contents[key])
+
+    @stateful.rule(
+        key=st.sampled_from(KEYS),
+        suffix=st.integers(min_value=0, max_value=10_000),
+    )
+    def link_bot_message(self, key, suffix):
+        channel, thread_ts = key
+        thread = self._open(key)
+        slack_ts = f"{channel}:{thread_ts}:{suffix}"
+        self._run(self._store.link_bot_messages(thread.id, [slack_ts]))
+        self._links[slack_ts] = key
 
     # -- invariants --------------------------------------------------------
 
@@ -203,6 +216,13 @@ class StoreMachine(stateful.RuleBasedStateMachine):
             stored = self._run(self._store.facts(scope, scope_key))
             assert [fact.content for fact in stored] == contents
             assert len({fact.content_hash for fact in stored}) == len(stored)
+
+    @stateful.invariant()
+    def bot_messages_point_at_their_thread(self):
+        for slack_ts, key in self._links.items():
+            thread = self._run(self._store.thread_for_bot_message(slack_ts))
+            assert thread is not None, f"link {slack_ts} vanished"
+            assert (thread.channel_id, thread.thread_ts) == key
 
     @stateful.invariant()
     def recall_only_returns_live_rows_outside_the_current_thread(self):

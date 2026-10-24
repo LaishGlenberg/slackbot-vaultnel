@@ -261,6 +261,13 @@ enqueueing handler instead.
 Archiving keeps rows for audit and re-compaction; it only removes them from
 prompt assembly. That is what makes reset rare instead of routine.
 
+A 🗑️ (`wastebasket`) reaction is resolved through `bot_messages`, which maps
+every message the bot posted (including extra chunks of a long reply) to its
+thread. The placeholder is linked as soon as it is posted, so reacting while an
+answer is still streaming also resets. Reactions on other people's messages, on
+unknown timestamps, or from the bot itself are ignored. `/ask reset` and the
+reaction share `store.archive_thread`, so facts and raw rows survive either way.
+
 ## 6. Configuration
 
 `pydantic-settings`, loaded from `.env` (gitignored), template committed as
@@ -323,8 +330,9 @@ the param dropped rather than failing the call.
 ## 7. Data model
 
 `aiosqlite`, WAL mode, `busy_timeout=5000`, one connection owned by the writer.
-Schema applied at startup from `history/schema.sql` with idempotent DDL; no
-migration framework until the schema stops moving.
+Schema applied at startup from `history/schema.sql` with idempotent DDL. A
+`PRAGMA user_version` step rebuilds the FTS index once for databases created
+before it existed; no migration framework until the schema stops moving.
 
 ```sql
 CREATE TABLE IF NOT EXISTS threads (
@@ -349,13 +357,19 @@ CREATE TABLE IF NOT EXISTS messages (
     display_name TEXT,
     model        TEXT,
     tokens       INTEGER NOT NULL DEFAULT 0,
-    summarized   INTEGER NOT NULL DEFAULT 0,
     archived     INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, id);
-CREATE INDEX IF NOT EXISTS idx_messages_channel_time
-    ON messages(thread_id, created_at);
+
+-- posted bot messages (the placeholder and any extra chunks), so a 🗑️ reaction
+-- can be mapped back to the thread it answered
+CREATE TABLE IF NOT EXISTS bot_messages (
+    slack_ts   TEXT PRIMARY KEY,
+    thread_id  INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bot_messages_thread ON bot_messages(thread_id);
 
 CREATE TABLE IF NOT EXISTS facts (
     id          INTEGER PRIMARY KEY,
@@ -371,14 +385,19 @@ CREATE INDEX IF NOT EXISTS idx_facts_scope ON facts(scope, scope_key);
 
 -- Keyword recall (sqlite-vec unavailable in this environment)
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-    content, content='messages', content_rowid='id', tokenize='porter'
+    content, content='messages', content_rowid='id', tokenize='unicode61'
 );
-CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
-CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
         VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF content ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+        VALUES ('delete', old.id, old.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
 ```
 
@@ -389,6 +408,7 @@ Invariants:
 - `summarized_through_msg_id` is monotonic per thread; compaction never
   re-reads below it.
 - `facts.content_hash` is `sha256(scope + normalized_ws_lower(content))`.
+- each Slack message timestamp maps to at most one thread in `bot_messages`.
 - Archiving is a flag, never a delete (except `/ask forget`).
 
 Retention: no automatic pruning in v1. `vaultnel prune --older-than 90d` is a
@@ -500,8 +520,8 @@ wiring        __main__ + real socket  ->  bot usable in Slack here [done]
 compaction    rolling summary + writer + guardrails                 [done]
 extraction    facts: parse, dedupe, caps                            [done]
 recall        FTS snippet retrieval                                 [done]
-reset         archive flow, TTL, /ask commands                      [next]
-deploy        Dockerfile + host
+reset         archive flow, TTL, /ask commands                      [done]
+deploy        Dockerfile + host                                     [next]
 ```
 
 **Reordered after M2.** The renderer and handlers moved ahead of the memory

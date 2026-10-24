@@ -40,11 +40,15 @@ def register_handlers(app: AsyncApp, handlers: Handlers) -> None:
     async def on_message(body: Mapping[str, object], event: Mapping[str, object]) -> None:
         await handlers.handle_event(event, event_id=_event_id(body))
 
+    async def on_reaction(body: Mapping[str, object], event: Mapping[str, object]) -> None:
+        await handlers.handle_event(event, event_id=_event_id(body))
+
     async def on_ask(command: Mapping[str, object]) -> None:
         await handlers.handle_ask(command)
 
     app.event("app_mention")(ack=acknowledge, lazy=[on_mention])
     app.event("message")(ack=acknowledge, lazy=[on_message])
+    app.event("reaction_added")(ack=acknowledge, lazy=[on_reaction])
     app.command("/ask")(ack=acknowledge, lazy=[on_ask])
 
 

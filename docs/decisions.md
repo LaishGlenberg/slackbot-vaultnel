@@ -150,3 +150,17 @@ reach FTS as syntax. `Store.search_messages` owns the ranking: same channel,
 current thread excluded, archived threads and rows invisible, BM25 order. User
 and assistant turns are both recallable; assistant hits are labelled "Vaultnel".
 Recall failure is caught in the handler and never blocks a reply.
+
+## 2026-10 — Reaction reset: map posted messages, don't guess the thread
+
+A 🗑️ reaction only carries the reacted message's timestamp, not the thread root
+it belongs to. `bot_messages` stores `slack_ts → thread_id`, written through the
+single writer alongside turns, so the mapping survives restarts. Every chunk of
+a long reply is linked, and the placeholder is linked as soon as it is posted so
+a reaction mid-stream also resets. The bot ignores its own reactions and
+reactions on messages it did not post (the lookup naturally rejects them).
+
+`archive_thread` now clears the summary at archive time as well as on reopen,
+matching the spec: an archived thread contributes nothing to prompt assembly,
+while rows stay for audit/re-compaction. `/ask reset` and reactions use the same
+path.

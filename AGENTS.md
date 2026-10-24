@@ -21,10 +21,10 @@ ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair),
 `memory/writer.py` (single write queue + rolling compaction, bad-summary
 guardrails), `memory/facts.py` (strict JSON parse, scope keys, dedupe, caps,
 prompt retrieval), `memory/recall.py` (FTS query shaping + snippet mapping),
-`history/schema.sql` (FTS5 external-content index + triggers), `llm/prompts.py`,
-`/ask forget me`.
-258 tests green; the bot connects and answers live.
-Next slice: reset — archive flow, thread TTL, remaining `/ask` commands.
+`history/schema.sql` (FTS5 external-content index, `bot_messages` mapping),
+`llm/prompts.py`, `/ask forget me`, 🗑️ reaction reset.
+273 tests green; the bot connects and answers live.
+Next slice: deploy — Dockerfile, heartbeat/health logging, host setup.
 
 ## Commands
 

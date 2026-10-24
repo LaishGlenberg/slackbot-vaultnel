@@ -40,18 +40,21 @@ SUMMARY_SIZE_GUARD = 1.5
 
 
 class TurnWriter(Protocol):
-    """What handlers need from memory: persist a batch of turns."""
+    """What handlers need from memory: persist turns and bot-message links."""
 
     async def record(self, thread: Thread, turns: Sequence[Turn]) -> None: ...
+
+    async def link(self, thread: Thread, slack_ts: Sequence[str]) -> None: ...
 
     async def flush(self) -> None: ...
 
 
 @dataclass(frozen=True)
 class _Job:
-    kind: Literal["turns", "extract"]
+    kind: Literal["turns", "extract", "links"]
     thread: Thread
     turns: tuple[Turn, ...] = ()
+    slack_ts: tuple[str, ...] = ()
     future: asyncio.Future[None] | None = None
 
 
@@ -64,6 +67,9 @@ class DirectTurnWriter:
     async def record(self, thread: Thread, turns: Sequence[Turn]) -> None:
         for turn in turns:
             await self._store.append_message(thread.id, turn)
+
+    async def link(self, thread: Thread, slack_ts: Sequence[str]) -> None:
+        await self._store.link_bot_messages(thread.id, slack_ts)
 
     async def flush(self) -> None:
         return None
@@ -127,6 +133,21 @@ class MemoryWriter:
         assert job.future is not None
         await job.future
 
+    async def link(self, thread: Thread, slack_ts: Sequence[str]) -> None:
+        """Remember the Slack messages of a reply so reactions can find the thread."""
+
+        if self._task is None:
+            raise RuntimeError("memory writer is not running")
+        job = _Job(
+            kind="links",
+            thread=thread,
+            slack_ts=tuple(ts for ts in slack_ts if ts),
+            future=asyncio.get_running_loop().create_future(),
+        )
+        await self._queue.put(job)
+        assert job.future is not None
+        await job.future
+
     # -- worker ------------------------------------------------------------
 
     async def _run(self) -> None:
@@ -135,6 +156,8 @@ class MemoryWriter:
             try:
                 if job.kind == "turns":
                     await self._apply_turns(job)
+                elif job.kind == "links":
+                    await self._apply_links(job.thread, job.slack_ts)
                 else:
                     await self._apply_extraction(job.thread)
             except Exception as exc:  # noqa: BLE001 - log, report to the caller
@@ -159,6 +182,12 @@ class MemoryWriter:
             await self._store.append_message(thread.id, turn)
         await self._maybe_compact(thread)
         self._schedule_extraction(thread)
+
+    async def _apply_links(self, thread: Thread, slack_ts: Sequence[str]) -> None:
+        current = await self._store.get_thread(thread.channel_id, thread.thread_ts)
+        if current is None or not slack_ts:
+            return
+        await self._store.link_bot_messages(current.id, slack_ts)
 
     # -- compaction --------------------------------------------------------
 

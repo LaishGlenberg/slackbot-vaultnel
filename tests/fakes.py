@@ -40,6 +40,7 @@ class InMemoryStore:
         self._archived_messages: dict[int, set[int]] = {}
         self._facts: dict[int, StoredFact] = {}
         self._fact_keys: set[tuple[str, str, str]] = set()
+        self._bot_messages: dict[str, int] = {}
         self._next_thread_id = 1
         self._next_message_id = 1
         self._next_fact_id = 1
@@ -161,9 +162,21 @@ class InMemoryStore:
         if thread is None:
             raise ValueError(f"unknown thread {channel_id}/{thread_ts}")
         self._archived_messages[thread.id].update(m.id for m in self._messages[thread.id])
-        updated = replace(thread, archived=True, updated_at=self._clock())
+        updated = replace(thread, archived=True, summary="", updated_at=self._clock())
         self._threads[thread.id] = updated
         return updated
+
+    # -- bot messages ------------------------------------------------------
+
+    async def link_bot_messages(self, thread_id: int, slack_ts) -> None:
+        self._require_thread(thread_id)
+        for ts in slack_ts:
+            if ts:
+                self._bot_messages[ts] = thread_id
+
+    async def thread_for_bot_message(self, slack_ts: str) -> Thread | None:
+        thread_id = self._bot_messages.get(slack_ts)
+        return self._threads.get(thread_id) if thread_id is not None else None
 
     # -- facts -------------------------------------------------------------
 

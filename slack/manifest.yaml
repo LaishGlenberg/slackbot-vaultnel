@@ -28,6 +28,7 @@ oauth_config:
       - im:read
       - im:write            # open DM, get DM channel id
       - reactions:write     # :eyes: ack reaction
+      - reactions:read      # 🗑️ reaction resets a thread
       - users:read          # resolve user ids to names
 
 settings:
@@ -35,6 +36,7 @@ settings:
     bot_events:
       - app_mention
       - message.im
+      - reaction_added
   interactivity:
     is_enabled: true
   socket_mode_enabled: true

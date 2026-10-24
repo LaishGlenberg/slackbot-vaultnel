@@ -296,3 +296,13 @@ async def test_archived_threads_are_not_compacted_or_appended_to():
         assert await h.store.message_count(thread.id) == before
         assert h.llm.completion_calls == []
         assert (await h.store.get_thread(CHANNEL, ROOT_TS)).archived is True
+
+
+async def test_bot_message_links_go_through_the_queue():
+    async with Harness(llm=ScriptedLLM("unused")) as harness:
+        thread = await harness.thread()
+
+        await harness.writer.link(thread, ["111.111", "222.222"])
+
+        found = await harness.store.thread_for_bot_message("222.222")
+        assert found is not None and found.id == thread.id
