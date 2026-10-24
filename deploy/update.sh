@@ -38,10 +38,15 @@ docker rm -f vaultnel >/dev/null 2>&1 || true
 docker run -d \
     --name vaultnel \
     --restart unless-stopped \
+    --log-opt max-size=10m \
+    --log-opt max-file=3 \
     --env-file "$ENV_FILE" \
     -e DB_PATH=/data/vaultnel.db \
     -v vaultnel-data:/data \
     "$IMAGE" >/dev/null
 
-# Keep the 1 GB disk honest; the running image is not pruned.
-docker image prune -f --filter "until=72h" >/dev/null
+# Keep the disk honest without guessing at ages: the running image is tagged,
+# so deleting every dangling image except the two newest leaves exactly three
+# (current + two rollback candidates) however often we deploy.
+docker image ls -q --filter dangling=true | tail -n +3 \
+    | xargs -r docker image rm >/dev/null 2>&1 || true

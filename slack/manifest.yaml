@@ -9,6 +9,12 @@ display_information:
   background_color: "#1f2937"
 
 features:
+  app_home:
+    home_tab_enabled: false
+    # Without the messages tab, Slack refuses DMs with "Sending messages to this
+    # app has been turned off" and the app never appears under Apps.
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: vaultnel
     always_online: true
@@ -34,6 +40,8 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
+      # Agent view: lets the app notice a user opening the DM tab.
+      - app_home_opened
       - app_mention
       - message.im
       - reaction_added

@@ -46,9 +46,18 @@ def register_handlers(app: AsyncApp, handlers: Handlers) -> None:
     async def on_ask(command: Mapping[str, object]) -> None:
         await handlers.handle_ask(command)
 
+    async def on_app_home_opened() -> None:
+        """Ack-only: Agent view sends this whenever a user opens the DM tab.
+
+        The bot has nothing to show in App Home yet, but subscribing without a
+        listener makes Bolt log ``Unhandled request`` on every DM open, which
+        buries real errors in the logs.
+        """
+
     app.event("app_mention")(ack=acknowledge, lazy=[on_mention])
     app.event("message")(ack=acknowledge, lazy=[on_message])
     app.event("reaction_added")(ack=acknowledge, lazy=[on_reaction])
+    app.event("app_home_opened")(ack=acknowledge, lazy=[on_app_home_opened])
     app.command("/ask")(ack=acknowledge, lazy=[on_ask])
 
 
