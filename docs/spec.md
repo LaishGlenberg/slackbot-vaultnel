@@ -521,7 +521,7 @@ compaction    rolling summary + writer + guardrails                 [done]
 extraction    facts: parse, dedupe, caps                            [done]
 recall        FTS snippet retrieval                                 [done]
 reset         archive flow, TTL, /ask commands                      [done]
-deploy        Dockerfile + host                                     [next]
+deploy        Dockerfile + host                                     [done]
 ```
 
 **Reordered after M2.** The renderer and handlers moved ahead of the memory
@@ -548,12 +548,21 @@ CI: `uv run pytest -q` (slow tests deselected) plus `ruff`; no node matrices.
 
 ## 11. Deployment
 
-- `Dockerfile`: uv multi-stage, non-root, `python -m slackbot_vaultnel`.
-- Single instance only; SQLite on a mounted volume (`DB_PATH=/data/vaultnel.db`).
-- Target: Fly.io one machine + volume, Railway, or a VPS systemd unit.
-- Health: "socket connected" log at startup and a periodic heartbeat; exit
-  non-zero on unrecoverable config errors so the supervisor restarts.
-- Secrets from the host secret store, never baked into the image.
+Target: one always-on GCE e2-micro VM running the container. Socket Mode is
+outbound only, so the VM needs no inbound ports beyond SSH.
+
+- `Dockerfile`: uv multi-stage, non-root, `python -m slackbot_vaultnel`, with
+the `tiktoken` encoding baked into the image. `DB_PATH=/data/vaultnel.db`.
+- SQLite lives on the `vaultnel-data` Docker volume; image updates never touch
+it. Single instance only — no horizontal scaling in v1.
+- `cloudbuild.yaml`: push to `main` builds and pushes a commit-tagged image
+plus `:latest` to Artifact Registry. The VM runs a systemd timer that pulls
+`:latest` every five minutes and recreates the container only when the image
+ID changes. Runbook: `deploy/README.md`.
+- Health: startup logs the Socket Mode connection and a heartbeat every five
+minutes; config errors exit non-zero so the restart policy kicks in.
+- Secrets from `/opt/vaultnel/.env` on the host, never baked into the image or
+committed.
 
 ## 12. Milestones
 

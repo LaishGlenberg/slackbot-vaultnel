@@ -19,6 +19,9 @@ from slackbot_vaultnel.slack.handlers import Handlers
 
 logger = logging.getLogger("slackbot_vaultnel")
 
+#: Socket Mode has no inbound health check, so the log line is the liveness signal.
+HEARTBEAT_SECONDS = 300
+
 
 async def run() -> int:
     settings = load_settings()
@@ -50,7 +53,14 @@ async def run() -> int:
         register_handlers(app, handlers)
 
         socket = AsyncSocketModeHandler(app, settings.slack_app_token.get_secret_value())
-        await _serve(socket)
+        logger.info("connecting to Slack over Socket Mode")
+        heartbeat = asyncio.create_task(_heartbeat(), name="heartbeat")
+        try:
+            await _serve(socket)
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
     finally:
         await writer.stop()
         await store.close()
@@ -93,6 +103,12 @@ async def _serve(socket: AsyncSocketModeHandler) -> None:
             running.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await running
+
+
+async def _heartbeat(interval: float = HEARTBEAT_SECONDS) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        logger.info("heartbeat: process alive")
 
 
 def _configure_logging(settings: Settings) -> None:

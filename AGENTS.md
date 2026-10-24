@@ -22,9 +22,11 @@ ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair),
 guardrails), `memory/facts.py` (strict JSON parse, scope keys, dedupe, caps,
 prompt retrieval), `memory/recall.py` (FTS query shaping + snippet mapping),
 `history/schema.sql` (FTS5 external-content index, `bot_messages` mapping),
-`llm/prompts.py`, `/ask forget me`, 🗑️ reaction reset.
+`llm/prompts.py`, `/ask forget me`, 🗑️ reaction reset, `Dockerfile` +
+`cloudbuild.yaml` + `deploy/` (Cloud Build → Artifact Registry → VM pull timer).
 273 tests green; the bot connects and answers live.
-Next slice: deploy — Dockerfile, heartbeat/health logging, host setup.
+Next: verify the deploy on the VM (image build, first boot, reconnect after
+restart).
 
 ## Commands
 

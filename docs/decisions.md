@@ -164,3 +164,15 @@ reactions on messages it did not post (the lookup naturally rejects them).
 matching the spec: an archived thread contributes nothing to prompt assembly,
 while rows stay for audit/re-compaction. `/ask reset` and reactions use the same
 path.
+
+## 2026-10 — Deploy: one VM, pull-based updates
+
+Cloud Run was rejected for v1: SQLite needs a local persistent disk, Socket Mode
+needs an always-on instance, and GCS mounts are not safe for SQLite. A single
+e2-micro VM keeps the store, the socket and the disk in one place. Cloud Build
+builds and pushes commit-tagged images plus `:latest` to Artifact Registry on
+every push to `main`; a systemd timer on the VM pulls `:latest` every five
+minutes and recreates the container only when the image ID changes. That avoids
+SSH keys and cross-service IAM for Cloud Build while still deploying on push.
+The database is a named Docker volume, and the `tiktoken` encoding is baked into
+the image so the first reply never depends on a runtime download.

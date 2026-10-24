@@ -1,0 +1,9 @@
+[Unit]
+Description=Update the Vaultnel bot container
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vaultnel
+ExecStart=/opt/vaultnel/update.sh

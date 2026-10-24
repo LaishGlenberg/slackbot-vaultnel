@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+.env
+data
+docs
+slack
+tests
+prev-chat.md
+.coverage
+.hypothesis
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[oc]
