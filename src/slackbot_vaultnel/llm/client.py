@@ -94,6 +94,7 @@ class OpenAICompatClient:
         max_attempts: int = 3,
         backoff_base: float = 0.5,
         sleep: Sleep = asyncio.sleep,
+        reasoning_effort: str | None = None,
         http_client: httpx2.AsyncClient | None = None,
     ) -> None:
         self._client = AsyncOpenAI(
@@ -107,6 +108,7 @@ class OpenAICompatClient:
         self._max_tokens = max_tokens
         self._temperature = temperature
         self._max_attempts = max_attempts
+        self._reasoning_effort = reasoning_effort
         self._backoff_base = backoff_base
         self._sleep = sleep
 
@@ -182,6 +184,8 @@ class OpenAICompatClient:
         limit = self._max_tokens if max_tokens is None else max_tokens
         if limit:
             params["max_tokens"] = limit
+        if self._reasoning_effort is not None:
+            params["reasoning_effort"] = self._reasoning_effort
         sampling = self._temperature if temperature is UNSET else temperature
         if sampling is not None and supports_temperature(chosen):
             params["temperature"] = sampling

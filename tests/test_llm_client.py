@@ -56,6 +56,7 @@ def make_client(*scripted, **overrides) -> Harness:
     provider = MockProvider(*scripted)
     http_client = httpx2.AsyncClient(transport=httpx2.MockTransport(provider))
     sleeper = overrides.pop("sleeper", Sleeper())
+    reasoning_effort = overrides.pop("reasoning_effort", "none")
     client = OpenAICompatClient(
         api_key="sk-test",
         base_url=BASE,
@@ -64,6 +65,7 @@ def make_client(*scripted, **overrides) -> Harness:
         temperature=0.7,
         max_attempts=3,
         sleep=sleeper,
+        reasoning_effort=reasoning_effort,
         http_client=http_client,
         **overrides,
     )
@@ -294,3 +296,19 @@ async def test_stream_retries_like_complete():
     assert text == "ok"
     assert len(harness.provider.requests) == 2
     assert harness.sleeper.delays == [0.5]
+
+
+async def test_reasoning_effort_is_forwarded_to_the_provider():
+    harness = make_client(sse(chunk("ok")))
+
+    _ = [part async for part in harness.client.stream(MESSAGES)]
+
+    assert harness.provider.body()["reasoning_effort"] == "none"
+
+
+async def test_reasoning_effort_is_omitted_when_unset():
+    harness = make_client(sse(chunk("ok")), reasoning_effort=None)
+
+    _ = [part async for part in harness.client.stream(MESSAGES)]
+
+    assert "reasoning_effort" not in harness.provider.body()

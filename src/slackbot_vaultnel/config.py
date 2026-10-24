@@ -32,6 +32,26 @@ class Provider(StrEnum):
     OPENROUTER = "openrouter"
 
 
+class ThinkingLevel(StrEnum):
+    """How much reasoning the model may do before answering.
+
+    The provider spells "off" as ``none``; the other levels pass through as-is.
+    """
+
+    OFF = "off"
+    LOW = "low"
+    HIGH = "high"
+    MAX = "max"
+
+
+REASONING_EFFORT: dict[ThinkingLevel, str] = {
+    ThinkingLevel.OFF: "none",
+    ThinkingLevel.LOW: "low",
+    ThinkingLevel.HIGH: "high",
+    ThinkingLevel.MAX: "max",
+}
+
+
 @dataclass(frozen=True)
 class ProviderDefaults:
     base_url: str
@@ -41,7 +61,7 @@ class ProviderDefaults:
 PROVIDERS: dict[Provider, ProviderDefaults] = {
     Provider.DEEPSEEK: ProviderDefaults(
         base_url="https://api.deepseek.com",
-        model="deepseek-chat",
+        model="deepseek-flash",
     ),
     Provider.OPENROUTER: ProviderDefaults(
         base_url="https://openrouter.ai/api/v1",
@@ -72,6 +92,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
     llm_max_tokens: int = Field(default=2048, ge=1)
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    thinking_level: ThinkingLevel = ThinkingLevel.OFF
 
     # Persona
     system_prompt: str | None = None
@@ -133,6 +154,10 @@ class Settings(BaseSettings):
     @property
     def resolved_model(self) -> str:
         return self.llm_model or PROVIDERS[self.llm_provider].model
+
+    @property
+    def reasoning_effort(self) -> str:
+        return REASONING_EFFORT[self.thinking_level]
 
     @property
     def resolved_utility_model(self) -> str:

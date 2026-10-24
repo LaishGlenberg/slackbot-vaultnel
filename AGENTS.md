@@ -7,6 +7,7 @@ conversation memory in SQLite. Python 3.12, uv, asyncio.
 
 - Design spec: `docs/spec.md` — read the relevant section before implementing a
   slice; update it when a decision changes.
+- Decision log: `docs/decisions.md` — add an entry for choices with tradeoffs.
 - Slack app definition: `slack/manifest.yaml`.
 - Env template: `.env.example` (never commit `.env`).
 
@@ -30,3 +31,7 @@ implementation, then refactor. See `docs/spec.md` §10 for the slice order and
 
 Tests never touch Slack, the network, or the real `.env`. Dependencies
 (`Store`, `LLMClient`, `clock`) are injected; fakes live in `tests/fakes.py`.
+
+## Docs
+
+If making a big change from the spec or test plan, add an entry to decisions.md

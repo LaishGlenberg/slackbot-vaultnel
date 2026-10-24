@@ -247,6 +247,7 @@ prompt assembly. That is what makes reset rare instead of routine.
 | `LLM_TIMEOUT_SECONDS` | no | `120` | |
 | `LLM_MAX_TOKENS` | no | `2048` | reply output cap |
 | `LLM_TEMPERATURE` | no | `0.7` | dropped for reasoner models |
+| `THINKING_LEVEL` | no | `off` | `off` \| `low` \| `high` \| `max`; `off` is sent as `reasoning_effort: "none"` |
 | `SYSTEM_PROMPT` / `SYSTEM_PROMPT_FILE` | no | built-in | file wins |
 | `INCLUDE_SPEAKER_NAMES` | no | `true` | resolve user ids → display names |
 | `SHORT_TERM_TOKENS` | no | `2000` | |
@@ -271,13 +272,17 @@ each token).
 
 | Provider | Base URL | Default model |
 | --- | --- | --- |
-| deepseek | `https://api.deepseek.com` | `deepseek-chat` |
+| deepseek | `https://api.deepseek.com` | `deepseek-flash` |
 | openrouter | `https://openrouter.ai/api/v1` | `deepseek/deepseek-chat` |
 
-DeepSeek currently answers to `deepseek-chat` but reports the underlying model
-as `deepseek-flash`, and `reasoner` aliases still exist yet spend their
-`max_tokens` on reasoning before emitting content. The bot therefore stays on
-`deepseek-chat` for both replies and utility calls.
+DeepSeek currently serves `deepseek-flash` (fast) and `deepseek-v4-pro`
+(flagship). The legacy `deepseek-chat` / `reasoner` aliases still answer but
+both resolve to `deepseek-flash`, and every reasoning model spends
+`max_tokens` on hidden reasoning before emitting content. The bot therefore
+pins `deepseek-flash` and controls thinking explicitly through
+`THINKING_LEVEL` → `reasoning_effort` (`off` → `none`, since `off` is rejected
+by the API). Default is off for fast answers; `low`/`high`/`max` are available
+per deployment. Verified against the live API.
 
 Both are OpenAI-compatible, so one `openai`-SDK code path serves both and
 switching is env-only. Models that reject `temperature` (reasoner family) have
@@ -447,18 +452,27 @@ Per slice:
 Order of slices, so every dependency exists before its consumer:
 
 ```
-config        settings load/validate, missing-var errors
-tokens        estimator + budget arithmetic
-store         contract suite: threads, messages, facts, FTS recall, archive
-              + StoreMachine stateful invariants (both implementations)
-llm/client    request shape (respx), streaming assembly, param dropping
-memory/ctx    tier selection, budget ceilings
-compaction    trigger + rolling summary + guardrails
-extraction    facts: parse, dedupe, caps
+config        settings load/validate, missing-var errors          [done]
+tokens        estimator + budget arithmetic                        [done]
+store         contract suite + StoreMachine stateful invariants    [done]
+llm/client    streaming, retries, params, reasoning effort         [done]
+memory/ctx    tier selection, budget ceilings, prompt assembly     [next]
 render        chunking, throttle, fence repair
 handlers      app_mention, message.im, /ask, reset
-wiring        __main__ + real socket (manual smoke test)
+wiring        __main__ + real socket  ->  bot usable in Slack here
+compaction    rolling summary + guardrails
+extraction    facts: parse, dedupe, caps
+recall        FTS snippet retrieval
+reset         archive flow, TTL, /ask commands
+deploy        Dockerfile + host
 ```
+
+**Reordered after M2.** The renderer and handlers moved ahead of the memory
+tiers so a working bot exists several slices earlier. This is safe because
+handlers are written against the `PromptRequest` interface: adding compaction
+and recall later only changes what the caller puts into that request, not the
+handler pipeline or the message flow. Short-term window assembly is part of
+`memory/ctx`, so the first working bot already has usable per-thread context.
 
 Interfaces get defined first because tests drive them: `Store` protocol, then
 `InMemoryStore` (fast fake), then `SqliteStore` (real), with one contract suite
@@ -487,21 +501,24 @@ CI: `uv run pytest -q` (slow tests deselected) plus `ruff`; no node matrices.
 | M0 | Slack app from `slack/manifest.yaml`, tokens in `.env` | `auth.test` returns `ok: true` |
 | M1 | config + tokens + LLM client, TDD'd | `pytest` green; CLI prints one reply |
 | M2 | store contract suite + stateful machine + sqlite schema | both stores pass the same tests and the same StateMachine |
-| M3 | Bolt app: mention + DM, single-shot, no memory | bot replies in a real channel |
+| M3 | prompt assembly: `PromptRequest` + tier budgets | budget ceilings hold under property tests |
 | M4 | streaming renderer | long answer splits correctly, updates throttled |
-| M5 | memory tiers: window, compaction, facts, recall | follow-ups work; prompt size flat after 50 turns |
-| M6 | reset + TTL + error handling + README | `pytest` green incl. slow smoke |
-| M7 | Dockerfile + deploy | bot online with no local process |
+| M5 | Bolt app + wiring: mention + DM with short-term memory | bot answers in a real channel |
+| M6 | compaction + fact extraction + recall | prompt size flat after 50 turns; facts deduped |
+| M7 | reset + TTL + error handling + README | `pytest` green incl. slow smoke |
+| M8 | Dockerfile + deploy | bot online with no local process |
 
 ## 13. Decisions
 
 | Question | Decision |
 | --- | --- |
 | Persona | Neutral helpful assistant, override via `SYSTEM_PROMPT_FILE` |
-| Default model | `deepseek-chat`; `deepseek-reasoner` opt-in |
+| Default model | `deepseek-flash`, thinking `off`; see `docs/decisions.md` |
 | Speaker names in prompt | Yes — resolved display names (`INCLUDE_SPEAKER_NAMES`) |
 | Memory reset | Automated compaction + TTL primary; `/ask reset` + 🗑️ last resort |
 | Retrieval | FTS5 keyword only in v1; embeddings behind the same interface later |
+
+Day-to-day decisions and their rationale live in `docs/decisions.md`.
 
 Open: whether the bot should answer unprompted in channels it's invited to
 (currently: no — mention or DM only), and whether `/ask` should support a

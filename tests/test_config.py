@@ -9,6 +9,7 @@ from slackbot_vaultnel.config import (
     ConfigError,
     Provider,
     Settings,
+    ThinkingLevel,
     load_settings,
 )
 
@@ -21,9 +22,9 @@ def test_minimal_env_loads_with_documented_defaults(minimal_env):
     settings = load_settings(env_file=None)
 
     assert settings.llm_provider is Provider.DEEPSEEK
-    assert settings.resolved_model == "deepseek-chat"
+    assert settings.resolved_model == "deepseek-flash"
     assert settings.resolved_base_url == "https://api.deepseek.com"
-    assert settings.resolved_utility_model == "deepseek-chat"
+    assert settings.resolved_utility_model == "deepseek-flash"
     assert settings.prompt_budget_tokens == 6000
     assert settings.short_term_tokens == 2000
     assert settings.keep_recent_turns == 6
@@ -144,7 +145,7 @@ def test_redacted_summary_never_contains_full_secrets(minimal_env):
     assert "sk-0123456789abcdef" not in dumped
     assert summary["slack_bot_token"].startswith("xoxb-1")
     assert summary["llm_provider"] == "deepseek"
-    assert summary["llm_model"] == "deepseek-chat"
+    assert summary["llm_model"] == "deepseek-flash"
 
 
 def test_repr_does_not_leak_secrets(minimal_env):
@@ -225,7 +226,34 @@ def test_blank_optional_values_are_treated_as_unset(minimal_env, monkeypatch):
 
     assert settings.system_prompt_file is None
     assert settings.llm_base_url is None
-    assert settings.resolved_model == "deepseek-chat"
-    assert settings.resolved_utility_model == "deepseek-chat"
+    assert settings.resolved_model == "deepseek-flash"
+    assert settings.resolved_utility_model == "deepseek-flash"
     assert settings.resolved_base_url == "https://api.deepseek.com"
     assert settings.resolved_system_prompt == DEFAULT_SYSTEM_PROMPT
+
+
+def test_default_model_is_flash_with_thinking_off(minimal_env):
+    settings = load_settings(env_file=None)
+
+    assert settings.resolved_model == "deepseek-flash"
+    assert settings.thinking_level is ThinkingLevel.OFF
+    assert settings.reasoning_effort == "none"
+
+
+@pytest.mark.parametrize(
+    "level, effort",
+    [("off", "none"), ("low", "low"), ("high", "high"), ("max", "max")],
+)
+def test_thinking_level_maps_to_the_provider_parameter(minimal_env, monkeypatch, level, effort):
+    monkeypatch.setenv("THINKING_LEVEL", level)
+
+    assert load_settings(env_file=None).reasoning_effort == effort
+
+
+def test_unknown_thinking_level_is_rejected(minimal_env, monkeypatch):
+    monkeypatch.setenv("THINKING_LEVEL", "turbo")
+
+    with pytest.raises(ConfigError) as exc:
+        load_settings(env_file=None)
+
+    assert "THINKING_LEVEL" in str(exc.value)
