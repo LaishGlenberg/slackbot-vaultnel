@@ -228,7 +228,9 @@ touching prompt assembly.
 All memory mutations go through one background `MemoryWriter` consuming an
 `asyncio.Queue`. Single writer means no sqlite write contention and no locks
 around SQL. Queue is bounded (`MEMORY_QUEUE_MAX=100`); on overflow the oldest
-low-priority job (fact extraction) is dropped before a persist job.
+low-priority job (fact extraction) is dropped before a persist job. Persist
+jobs are never dropped: with no extraction jobs queued, a full queue applies
+backpressure to the enqueueing handler instead.
 
 ### 5.6 Reset
 
@@ -478,8 +480,8 @@ memory/ctx    tier selection, budget ceilings, prompt assembly     [done]
 render        chunking, throttle, fence repair                      [done]
 handlers      app_mention, message.im, /ask, reset                  [done]
 wiring        __main__ + real socket  ->  bot usable in Slack here [done]
-compaction    rolling summary + writer + guardrails                 [next]
-extraction    facts: parse, dedupe, caps
+compaction    rolling summary + writer + guardrails                 [done]
+extraction    facts: parse, dedupe, caps                            [next]
 recall        FTS snippet retrieval
 reset         archive flow, TTL, /ask commands
 deploy        Dockerfile + host

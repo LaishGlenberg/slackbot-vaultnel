@@ -17,10 +17,12 @@ Done: config, token budgeting, store (+stateful machine), LLM client,
 thinking-level control, `memory/context.py` (tier selection + hard budget
 ceiling), `slack/render.py` (streaming, throttling, chunking + fence repair),
 `slack/handlers.py` (filter/dedupe, thread locks, replies, persistence),
-`slack/app.py` + `__main__.py` (ack-first lazy listeners, socket lifecycle).
-185 tests green; the bot connects and answers live.
-Next slice: `memory/writer.py` + compaction — rolling summary, write queue,
-bad-summary guardrails.
+`slack/app.py` + `__main__.py` (ack-first lazy listeners, socket lifecycle),
+`memory/writer.py` (single write queue + rolling compaction, bad-summary
+guardrails), `llm/prompts.py`.
+195 tests green; the bot connects and answers live.
+Next slice: fact extraction — strict JSON parse, scope validation, dedupe, caps,
+`/ask forget me`.
 
 ## Commands
 

@@ -258,11 +258,17 @@ class ScriptedLLM:
         *replies: str,
         delay: float = 0.0,
         error: Exception | None = None,
+        completions: list[str] | None = None,
+        completion_error: Exception | None = None,
     ) -> None:
         self.replies = list(replies) or ["scripted reply"]
         self.delay = delay
         self.error = error
+        self.completions = completions
+        self.completion_error = completion_error
         self.calls: list[list[dict[str, str]]] = []
+        self.completion_calls: list[list[dict[str, str]]] = []
+        self.completion_kwargs: list[dict[str, object]] = []
         self.active = 0
         self.max_active = 0
 
@@ -287,8 +293,15 @@ class ScriptedLLM:
     async def complete(self, messages, *, model=None, max_tokens=None, temperature=None):
         from slackbot_vaultnel.llm.client import Completion
 
-        self.calls.append(list(messages))
-        if self.error is not None:
-            raise self.error
-        text = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+        self.completion_calls.append(list(messages))
+        self.completion_kwargs.append(
+            {"model": model, "max_tokens": max_tokens, "temperature": temperature}
+        )
+        if self.completion_error is not None:
+            raise self.completion_error
+        if self.completions:
+            index = min(len(self.completion_calls) - 1, len(self.completions) - 1)
+            text = self.completions[index]
+        else:
+            text = self.replies[min(len(self.completion_calls) - 1, len(self.replies) - 1)]
         return Completion(text=text, model="fake", tokens_in=1, tokens_out=1)

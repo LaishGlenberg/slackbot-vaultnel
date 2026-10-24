@@ -40,12 +40,14 @@ def make(
     clock: ManualClock | None = None,
     llm: ScriptedLLM | None = None,
     slack: FakeSlackClient | None = None,
+    store=None,
+    writer=None,
     **settings_overrides: object,
 ):
     clock = clock or ManualClock()
     slack = slack or FakeSlackClient(clock=clock)
     llm = llm or ScriptedLLM(reply)
-    store = InMemoryStore(clock=clock.now)
+    store = store or InMemoryStore(clock=clock.now)
     handlers = Handlers(
         client=slack,
         store=store,
@@ -53,8 +55,20 @@ def make(
         settings=settings(**settings_overrides),
         bot_user_id=BOT,
         clock=clock.now,
+        writer=writer,
     )
     return handlers, slack, store, llm
+
+
+class RecordingWriter:
+    def __init__(self, store) -> None:
+        self.store = store
+        self.batches: list[tuple[int, list[tuple[str, str]]]] = []
+
+    async def record(self, thread, turns) -> None:
+        self.batches.append((thread.id, [(turn.role, turn.content) for turn in turns]))
+        for turn in turns:
+            await self.store.append_message(thread.id, turn)
 
 
 def mention(
@@ -245,6 +259,17 @@ async def test_sharing_a_thread_serializes_answers():
 
     assert len(llm.calls) == 2
     assert llm.max_active == 1
+
+
+async def test_turns_are_handed_to_the_writer_as_one_failed_or_successful_batch():
+    clock = ManualClock()
+    store = InMemoryStore(clock=clock.now)
+    writer = RecordingWriter(store)
+    handlers, _, _, _ = make(clock=clock, store=store, writer=writer)
+
+    await handlers.handle_event(mention(f"<@{BOT}> hello"), event_id="e1")
+
+    assert writer.batches == [(1, [("user", "hello"), ("assistant", "the answer")])]
 
 
 async def test_a_duplicate_event_is_processed_once():

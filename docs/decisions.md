@@ -103,3 +103,18 @@ lands, handlers append turns directly after the stream through one small
 `/ask forget me` currently confirms that no user facts are stored, because
 facts do not exist yet. The extraction slice replaces that branch with a real
 delete.
+
+## 2026-10 — Memory writes: one queue, compactor behind it
+
+All turn writes go through one `MemoryWriter` task. The handler awaits the
+batch only *after* the final Slack update, so the user never waits on memory,
+but the per-thread lock is still held until the turns (and any compaction)
+finish. That is what makes the next message in the thread see the previous
+ones instead of racing the writer.
+
+Compaction rolls forward: it only reads turns above
+`summarized_through_msg_id`, keeps the newest `KEEP_RECENT_TURNS` verbatim, and
+summarises the rest together with the previous summary. Empty, oversized
+(>1.5× cap) or failed summaries are rejected and retried on the next turn; the
+watermark never moves backwards. A thread archived by reset is skipped, so an
+in-flight reply cannot resurrect it.

@@ -24,16 +24,17 @@ import asyncio
 import logging
 import re
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Protocol
 
 from slackbot_vaultnel.config import Settings
-from slackbot_vaultnel.history.store import Store, Turn, utcnow
+from slackbot_vaultnel.history.store import Store, Thread, Turn, utcnow
 from slackbot_vaultnel.llm.client import AuthError, LLMError, RateLimited
 from slackbot_vaultnel.memory.context import PromptBudget, PromptRequest, build
 from slackbot_vaultnel.memory.tokens import count_tokens
+from slackbot_vaultnel.memory.writer import DirectTurnWriter, TurnWriter
 from slackbot_vaultnel.slack.render import Renderer, SlackReplyClient
 
 logger = logging.getLogger(__name__)
@@ -71,9 +72,11 @@ class Handlers:
         clock: Callable[[], datetime] = utcnow,
         renderer_factory: RendererFactory = Renderer,
         llm_semaphore: asyncio.Semaphore | None = None,
+        writer: TurnWriter | None = None,
     ) -> None:
         self.client = client
         self.store = store
+        self.writer = writer or DirectTurnWriter(store)
         self.llm = llm
         self.settings = settings
         self.bot_user_id = bot_user_id
@@ -249,15 +252,12 @@ class Handlers:
                 ]
 
             thread = await self.store.get_or_create_thread(channel, memory_thread_ts)
-            await self._persist(
-                thread.id,
-                Turn(
-                    role="user",
-                    content=text,
-                    tokens=count_tokens(text),
-                    slack_user=user,
-                    display_name=display_name,
-                ),
+            user_turn = Turn(
+                role="user",
+                content=text,
+                tokens=count_tokens(text),
+                slack_user=user,
+                display_name=display_name,
             )
 
             renderer = self.renderer_factory(
@@ -271,6 +271,7 @@ class Handlers:
                 await renderer.start()
             except Exception:  # noqa: BLE001
                 logger.exception("could not post a placeholder to %s/%s", channel, memory_thread_ts)
+                await self._record(thread, [user_turn])
                 return
 
             try:
@@ -282,27 +283,33 @@ class Handlers:
                 logger.warning("model call failed for %s/%s: %s", channel, memory_thread_ts, exc)
                 await renderer.fail(_friendly_error(exc))
                 await self._settle_reaction(channel, ack_ts, success=False)
+                await self._record(thread, [user_turn])
                 return
             except Exception:  # noqa: BLE001 - one bad reply must not kill the socket
                 logger.exception("unhandled reply failure for %s/%s", channel, memory_thread_ts)
                 await renderer.fail(GENERIC_FAILURE)
                 await self._settle_reaction(channel, ack_ts, success=False)
+                await self._record(thread, [user_turn])
                 return
 
             if result.text.strip():
-                await self._persist(
-                    thread.id,
-                    Turn(
-                        role="assistant",
-                        content=result.text,
-                        tokens=count_tokens(result.text),
-                        model=self.settings.resolved_model,
-                    ),
-                )
                 await self._settle_reaction(channel, ack_ts, success=True)
+                await self._record(
+                    thread,
+                    [
+                        user_turn,
+                        Turn(
+                            role="assistant",
+                            content=result.text,
+                            tokens=count_tokens(result.text),
+                            model=self.settings.resolved_model,
+                        ),
+                    ],
+                )
             else:
                 # The renderer already marked the empty answer with :warning:.
                 await self._settle_reaction(channel, ack_ts, success=False)
+                await self._record(thread, [user_turn])
 
     def _stream(self, prompt: list[dict[str, str]]) -> AsyncIterator[str]:
         return self.llm.stream(
@@ -321,11 +328,11 @@ class Handlers:
 
     # -- persistence -------------------------------------------------------
 
-    async def _persist(self, thread_id: int, turn: Turn) -> None:
+    async def _record(self, thread: Thread, turns: Sequence[Turn]) -> None:
         try:
-            await self.store.append_message(thread_id, turn)
+            await self.writer.record(thread, turns)
         except Exception:  # noqa: BLE001
-            logger.exception("could not persist %s turn in thread %s", turn.role, thread_id)
+            logger.exception("could not record turns in thread %s", thread.id)
 
     # -- Slack side effects ------------------------------------------------
 

@@ -13,6 +13,7 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slackbot_vaultnel.config import ConfigError, Settings, load_settings
 from slackbot_vaultnel.history.store import SqliteStore, utcnow
 from slackbot_vaultnel.llm.client import OpenAICompatClient
+from slackbot_vaultnel.memory.writer import MemoryWriter
 from slackbot_vaultnel.slack.app import create_app, register_handlers
 from slackbot_vaultnel.slack.handlers import Handlers
 
@@ -27,6 +28,9 @@ async def run() -> int:
     settings.ensure_db_dir()
     store = SqliteStore(settings.db_path, clock=utcnow)
     await store.open()
+    llm = _build_llm(settings)
+    writer = MemoryWriter(store=store, llm=llm, settings=settings, clock=utcnow)
+    await writer.start()
     try:
         app = create_app(settings)
         auth = await app.client.auth_test()
@@ -36,17 +40,19 @@ async def run() -> int:
         handlers = Handlers(
             client=app.client,
             store=store,
-            llm=_build_llm(settings),
+            llm=llm,
             settings=settings,
             bot_user_id=bot_user_id,
             clock=utcnow,
             llm_semaphore=asyncio.Semaphore(settings.max_concurrent_llm),
+            writer=writer,
         )
         register_handlers(app, handlers)
 
         socket = AsyncSocketModeHandler(app, settings.slack_app_token.get_secret_value())
         await _serve(socket)
     finally:
+        await writer.stop()
         await store.close()
     return 0
 
