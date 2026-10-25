@@ -1,0 +1,60 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      previous_tag:
+        description: Tag to compare against
+        required: true
+        default: v0.0.1
+      bump:
+        description: Version bump
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next tag
+        id: next
+        env:
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git rev-parse -q --verify "refs/tags/$PREVIOUS_TAG" >/dev/null \
+            || { echo "Tag $PREVIOUS_TAG does not exist" >&2; exit 1; }
+
+          version="${PREVIOUS_TAG#v}"
+          IFS=. read -r major minor patch <<< "$version"
+          case "$BUMP" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+
+          echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: Create the tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.next.outputs.tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+        run: |
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --notes-start-tag "$PREVIOUS_TAG"
