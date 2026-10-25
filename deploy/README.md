@@ -105,14 +105,13 @@ and `heartbeat: process alive` every five minutes.
 - **Rollback**: pin `VAULTNEL_IMAGE` in `/opt/vaultnel/.env` to an older
   `:<commit-sha>` tag, run `update.sh`, then switch back to `:latest` when ready.
   The tag is re-pulled from the registry, so no local copy is needed.
-- **Disk**: `update.sh` keeps exactly one image (prunes before and after the
-  pull) and logs `disk: …` each time. Old `:$COMMIT_SHA` tags accumulate in the
-  registry, not on the VM; cap them with a cleanup policy:
-
-  ```bash
-  gcloud artifacts repositories set-cleanup-policies vaultnel --location=us-west2 \
-    --policy=keep-minimum-versions=10
-  ```
+- **Disk**: `update.sh` keeps exactly one image (prunes before the pull, after
+  the pull, and after a restart — so no-op runs clean up too) and logs `disk: …`
+  each time.
+- **Registry**: older `:$COMMIT_SHA` tags live in Artifact Registry, not on the
+  VM. Repo `gcloud-backend` is shared with the backend and staging images, so a
+  cleanup policy there must be scoped with `packageNamePrefixes: [vaultnel]` —
+  a repo-wide delete rule would prune those images too.
 - **Database**: the `vaultnel-data` Docker volume holds
   `/data/vaultnel.db`; it survives image updates. Snapshot the disk before
   schema changes you do not trust.

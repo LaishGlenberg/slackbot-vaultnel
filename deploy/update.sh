@@ -32,6 +32,12 @@ docker image prune -f >/dev/null 2>&1 || true
 
 docker pull --quiet "$IMAGE" >/dev/null
 
+# Before the guard, not after it: the guard exits on every ordinary timer run,
+# so cleanup placed below would only happen when the container changes. An
+# untagged image left by an interrupted run would then never be reclaimed. The
+# running image is always protected, so this is a no-op most of the time.
+docker image prune -a -f >/dev/null 2>&1 || true
+
 current="$(docker inspect --format '{{.Image}}' vaultnel 2>/dev/null || true)"
 target="$(docker inspect --format '{{.Id}}' "$IMAGE")"
 if [ "$current" = "$target" ]; then
