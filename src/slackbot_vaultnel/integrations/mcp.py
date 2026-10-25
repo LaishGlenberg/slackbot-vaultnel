@@ -193,6 +193,14 @@ class HttpMCPClient:
                 continue
             allowed = set(config.tools)
             if allowed:
+                available = {it.name for it in tools}
+                missing = sorted(allowed - available)
+                if missing:
+                    logger.warning(
+                        "MCP server %s: allowlisted tools not found: %s",
+                        name,
+                        ", ".join(missing),
+                    )
                 tools = [it for it in tools if it.name in allowed]
             found.extend(tools)
 

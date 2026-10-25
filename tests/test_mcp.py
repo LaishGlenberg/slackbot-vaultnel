@@ -9,6 +9,7 @@ rule that one dead integration must not take the bot down.
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 
 import pytest
@@ -143,6 +144,17 @@ async def test_per_server_allowlist_filters_tools():
     client = build(factory, github=server(tools=("get_pull_request",)))
 
     assert [t.name for t in await client.list_tools()] == ["get_pull_request"]
+
+
+async def test_allowlist_entries_missing_from_the_server_are_logged(caplog):
+    factory = FakeSessionFactory({"github": (["list_pull_requests"], False)})
+    client = build(factory, github=server(tools=("list_pull_requests", "get_pull_request")))
+
+    with caplog.at_level(logging.WARNING):
+        tools = await client.list_tools()
+
+    assert [t.name for t in tools] == ["list_pull_requests"]
+    assert "get_pull_request" in caplog.text
 
 
 async def test_one_broken_server_does_not_hide_a_working_one():

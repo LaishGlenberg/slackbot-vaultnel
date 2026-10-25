@@ -13,7 +13,7 @@ import contextlib
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import httpx2
 import openai
@@ -22,6 +22,10 @@ from openai import AsyncOpenAI
 Messages = Sequence[Mapping[str, str]]
 Sleep = Callable[[float], Awaitable[None]]
 Tools = Sequence[Mapping[str, object]]
+
+
+if TYPE_CHECKING:
+    from slackbot_vaultnel.config import Settings
 
 
 class LLMError(RuntimeError):
@@ -298,3 +302,17 @@ class OpenAICompatClient:
                 f"the model provider returned {exc.status_code} after {attempts} attempts"
             )
         return LLMError(f"could not reach the model provider after {attempts} attempts")
+
+
+def build_llm(settings: Settings) -> OpenAICompatClient:
+    """The real client, configured exactly like the bot's. Shared by dev tooling."""
+
+    return OpenAICompatClient(
+        api_key=settings.llm_api_key.get_secret_value(),
+        base_url=settings.resolved_base_url,
+        model=settings.resolved_model,
+        max_tokens=settings.llm_max_tokens,
+        temperature=settings.llm_temperature,
+        timeout=settings.llm_timeout_seconds,
+        reasoning_effort=settings.reasoning_effort,
+    )

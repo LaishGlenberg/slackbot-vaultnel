@@ -10,6 +10,7 @@ from slackbot_vaultnel.config import (
     Provider,
     Settings,
     ThinkingLevel,
+    load_environment,
     load_settings,
 )
 
@@ -257,3 +258,22 @@ def test_unknown_thinking_level_is_rejected(minimal_env, monkeypatch):
         load_settings(env_file=None)
 
     assert "THINKING_LEVEL" in str(exc.value)
+
+
+def test_environment_merges_dotenv_secrets_for_integrations(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("GITHUB_TOKEN=from-file\nEMPTY=\n")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    environ = load_environment(path)
+
+    assert environ["GITHUB_TOKEN"] == "from-file"
+    assert "EMPTY" not in environ
+
+
+def test_exported_secret_beats_the_dotenv_file(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_text("GITHUB_TOKEN=from-file\n")
+    monkeypatch.setenv("GITHUB_TOKEN", "from-shell")
+
+    assert load_environment(path)["GITHUB_TOKEN"] == "from-shell"

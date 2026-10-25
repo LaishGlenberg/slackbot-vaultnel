@@ -285,7 +285,8 @@ the template.
 {"mcpServers": {"github": {
     "url": "https://api.githubcopilot.com/mcp/",
     "token_env": "GITHUB_TOKEN",
-    "tools": ["get_pull_request", "list_pull_requests", "get_check_runs"]}}}
+    "tools": ["get_me", "list_pull_requests", "pull_request_read",
+              "search_pull_requests", "get_file_contents", "search_code"]}}}
 ```
 
 - Discovery runs once at startup and connects lazily per server. A server that
@@ -297,7 +298,10 @@ the template.
   half-working.
 - `tools` is an allowlist. Remote servers expose 30–40 tools whose schemas cost
   prompt space before the user says anything, so an empty allowlist on a 6000
-  token budget is a mistake, not a default.
+  token budget is a mistake, not a default. A name that the server no longer
+  exposes is logged at startup and ignored; GitHub renamed `get_pull_request`
+  and `get_check_runs` to `pull_request_read`, so allowlists need to be checked
+  when the server changes.
 - Model-facing names are `<server>__<tool>`, sanitised to the provider's
   `[A-Za-z0-9_-]{1,64}` function-name shape, and de-duplicated after
   truncation.
@@ -501,6 +505,7 @@ Everything below runs offline; no Slack, no LLM, no sleeps.
 | `llm/agent` | `ScriptedTurnLLM` + fake caller | round/call caps, error recovery, result budget |
 | `slack/handlers` | fake client, `InMemoryStore`, `ScriptedLLM` | mention stripping, thread targeting, ignored subtypes, no double reply |
 | live smoke | `@pytest.mark.slow` | one real round trip, skipped without `LLM_API_KEY` |
+| local harness | real handlers/LLM/MCP, fake Slack | tool discovery and end-to-end answers without Socket Mode |
 
 Coverage gate: 85% on `memory/`, `history/`, `llm/`, `slack/render`,
 `slack/handlers`. Wiring in `__main__.py` and `slack/app.py` is excluded.

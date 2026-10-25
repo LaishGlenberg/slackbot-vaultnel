@@ -70,4 +70,14 @@ uv run pytest -q -m slow              # live LLM smoke test
 uv run ruff check . && uv run ruff format --check .
 ```
 
+To exercise the real handlers, memory, LLM and MCP tools without Slack:
+
+```bash
+uv run python -m slackbot_vaultnel.dev.chat
+uv run python -m slackbot_vaultnel.dev.chat --db data/dev.db "who am I on GitHub?"
+```
+
+Only Slack is faked; tool calls print as they happen. It reads `.env` and
+`mcp.json` next to the database, exactly like the bot.
+
 Tests never touch Slack, the network or `.env`.

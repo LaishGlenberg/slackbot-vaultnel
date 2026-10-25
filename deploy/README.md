@@ -70,7 +70,13 @@ database, so put it there once (the token stays in `.env`):
 sudo nano /opt/vaultnel/mcp.json      # copy mcp.example.json and edit it
 sudo docker run --rm -v vaultnel-data:/data -v /opt/vaultnel:/cfg \
   alpine cp /cfg/mcp.json /data/mcp.json
+sudo docker restart vaultnel
+sudo docker logs --tail 20 vaultnel | grep "MCP tools available"
 ```
+
+Check the integration from the repo before deploying: `uv run python -m
+slackbot_vaultnel.dev.chat --db data/dev.db "who am I on GitHub?"` prints the
+tool call and result without needing Slack.
 
 Append the image reference to the same file:
 

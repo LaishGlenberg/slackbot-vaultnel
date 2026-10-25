@@ -8,10 +8,12 @@ reading Python tracebacks.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -222,3 +224,21 @@ def load_settings(env_file: str | Path | None = ".env", **overrides: object) -> 
         return Settings(_env_file=env_file, **overrides)
     except ValidationError as exc:
         raise ConfigError(_format_error(exc)) from None
+
+
+def load_environment(env_file: str | Path | None = ".env") -> dict[str, str]:
+    """Process environment plus ``.env`` values, for untyped integration secrets.
+
+    Typed settings only cover known fields; an MCP server names its token with
+    an arbitrary ``token_env``. Docker passes those variables with
+    ``--env-file``, but a local run only has ``.env`` on disk. Process values
+    win, so exporting a token still overrides the file.
+    """
+
+    merged: dict[str, str] = {}
+    if env_file is not None:
+        path = Path(env_file)
+        if path.exists():
+            merged.update({key: value for key, value in dotenv_values(path).items() if value})
+    merged.update(os.environ)
+    return merged

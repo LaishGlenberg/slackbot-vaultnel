@@ -24,10 +24,12 @@ prompt retrieval), `memory/recall.py` (FTS query shaping + snippet mapping),
 `history/schema.sql` (FTS5 external-content index, `bot_messages` mapping),
 `llm/prompts.py`, `/ask forget me`, 🗑️ reaction reset,
 `integrations/` (remote MCP servers, tool shaping) + `llm/agent.py` (bounded
-tool loop), `Dockerfile` + `cloudbuild.yaml` + `deploy/` (Cloud Build →
-Artifact Registry → VM pull timer). 350 tests green; the bot connects and
-answers live.
-Next: configure a GitHub MCP server on the VM and verify a tool call end to end.
+tool loop), `integrations/discovery.py` (startup tool catalogue),
+`dev/` (terminal chat with fake Slack, real LLM + MCP), `Dockerfile` +
+`cloudbuild.yaml` + `deploy/` (Cloud Build → Artifact Registry → VM pull timer).
+367 tests green; the bot connects and answers live.
+Next: copy `data/mcp.json` into the VM's `vaultnel-data` volume (the PAT in
+`.env` is not enough on its own) and verify a GitHub tool call from Slack.
 
 ## Commands
 
@@ -42,6 +44,8 @@ uv run slackbot-vaultnel              # run the bot
 ```
 
 Coverage: `uv run pytest -q --cov --cov-report=term-missing`.
+
+For ssh: `gcloud compute ssh slackbot-e2-micro`
 
 ## Workflow
 

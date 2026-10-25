@@ -7,21 +7,23 @@ import contextlib
 import logging
 import signal
 import sys
-from typing import Any
 
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 
-from slackbot_vaultnel.config import ConfigError, Settings, load_settings
+from slackbot_vaultnel.config import (
+    ConfigError,
+    Settings,
+    load_environment,
+    load_settings,
+)
 from slackbot_vaultnel.history.store import SqliteStore, utcnow
+from slackbot_vaultnel.integrations.discovery import discover_tooling
 from slackbot_vaultnel.integrations.mcp import (
     MCP_CONFIG_FILENAME,
     HttpMCPClient,
-    MCPError,
     load_mcp_config,
 )
-from slackbot_vaultnel.integrations.tools import build_tools
-from slackbot_vaultnel.llm.agent import Tooling
-from slackbot_vaultnel.llm.client import OpenAICompatClient
+from slackbot_vaultnel.llm.client import build_llm
 from slackbot_vaultnel.memory.writer import MemoryWriter
 from slackbot_vaultnel.slack.app import create_app, register_handlers
 from slackbot_vaultnel.slack.handlers import Handlers
@@ -40,18 +42,22 @@ async def run() -> int:
     settings.ensure_db_dir()
     store = SqliteStore(settings.db_path, clock=utcnow)
     await store.open()
-    llm = _build_llm(settings)
+    llm = build_llm(settings)
     writer = MemoryWriter(store=store, llm=llm, settings=settings, clock=utcnow)
     await writer.start()
     servers = load_mcp_config(settings.db_path.parent / MCP_CONFIG_FILENAME)
-    mcp = HttpMCPClient(servers, timeout=settings.mcp_timeout_seconds)
+    mcp = HttpMCPClient(
+        servers,
+        timeout=settings.mcp_timeout_seconds,
+        environ=load_environment(),
+    )
     try:
         app = create_app(settings)
         auth = await app.client.auth_test()
         bot_user_id = _string(auth.get("user_id"))
         logger.info("authenticated as %s (%s)", auth.get("user"), bot_user_id)
 
-        tooling = await _discover_tools(mcp, servers)
+        tooling = await discover_tooling(mcp, servers)
         handlers = Handlers(
             client=app.client,
             store=store,
@@ -79,36 +85,6 @@ async def run() -> int:
         await writer.stop()
         await store.close()
     return 0
-
-
-async def _discover_tools(mcp: HttpMCPClient, servers: dict[str, Any]) -> Tooling | None:
-    """One discovery pass at startup; a dead integration never blocks the bot."""
-
-    if not servers:
-        return None
-    try:
-        discovered = await mcp.list_tools()
-    except MCPError as exc:
-        logger.warning("MCP integrations unavailable, continuing without tools: %s", exc)
-        return None
-    if not discovered:
-        logger.info("MCP configured but no tools matched the allowlists")
-        return None
-    tools = build_tools(discovered)
-    logger.info("MCP tools available: %s", ", ".join(tool.name for tool in tools))
-    return Tooling(tools=tools, call=mcp.call_tool)
-
-
-def _build_llm(settings: Settings) -> OpenAICompatClient:
-    return OpenAICompatClient(
-        api_key=settings.llm_api_key.get_secret_value(),
-        base_url=settings.resolved_base_url,
-        model=settings.resolved_model,
-        max_tokens=settings.llm_max_tokens,
-        temperature=settings.llm_temperature,
-        timeout=settings.llm_timeout_seconds,
-        reasoning_effort=settings.reasoning_effort,
-    )
 
 
 async def _serve(socket: AsyncSocketModeHandler) -> None:
