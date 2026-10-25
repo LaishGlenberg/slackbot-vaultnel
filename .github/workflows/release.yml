@@ -2,19 +2,6 @@ name: release
 
 on:
   workflow_dispatch:
-    inputs:
-      previous_tag:
-        description: Tag to compare against
-        required: true
-        default: v0.0.1
-      bump:
-        description: Version bump
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-        default: patch
 
 permissions:
   contents: write
@@ -29,32 +16,31 @@ jobs:
 
       - name: Compute the next tag
         id: next
-        env:
-          PREVIOUS_TAG: ${{ inputs.previous_tag }}
-          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
-          git rev-parse -q --verify "refs/tags/$PREVIOUS_TAG" >/dev/null \
-            || { echo "Tag $PREVIOUS_TAG does not exist" >&2; exit 1; }
+          previous="$(git tag --list 'v*.*.*' --sort=-version:refname | head -n1)"
+          if [ -z "$previous" ]; then
+            echo "No v*.*.* tag found" >&2
+            exit 1
+          fi
 
-          version="${PREVIOUS_TAG#v}"
+          version="${previous#v}"
           IFS=. read -r major minor patch <<< "$version"
-          case "$BUMP" in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            patch) patch=$((patch + 1)) ;;
-          esac
+          tag="v${major}.${minor}.$((patch + 1))"
+          git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+            && { echo "Tag $tag already exists" >&2; exit 1; }
 
-          echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
 
       - name: Create the tag and release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.next.outputs.tag }}
-          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          PREVIOUS: ${{ steps.next.outputs.previous }}
         run: |
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes \
-            --notes-start-tag "$PREVIOUS_TAG"
+            --notes-start-tag "$PREVIOUS"

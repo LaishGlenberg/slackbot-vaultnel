@@ -80,7 +80,7 @@ uv run python -m slackbot_vaultnel.dev.chat --db data/dev.db "who am I on GitHub
 Only Slack is faked; tool calls print as they happen. It reads `.env` and
 `mcp.json` next to the database, exactly like the bot.
 
-Releases are manual: run the **release** workflow, give it the previous tag,
-and it creates the next patch tag with GitHub-generated notes.
+Releases are manual: run the **release** workflow and it bumps the latest
+version tag and publishes a GitHub release with generated notes.
 
 Tests never touch Slack, the network or `.env`.
