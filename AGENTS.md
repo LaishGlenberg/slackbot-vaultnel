@@ -31,6 +31,8 @@ Next: configure a GitHub MCP server on the VM and verify a tool call end to end.
 
 ## Commands
 
+**DO NOT** run these after every minor change they take a long time to complete, only after you've completed a feature group.
+
 ```bash
 uv run pytest -q                      # full suite, offline
 uv run pytest -q -k memory            # one slice
