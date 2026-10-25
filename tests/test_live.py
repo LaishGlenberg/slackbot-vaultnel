@@ -30,7 +30,9 @@ LOOKUP = {
 
 
 def client() -> OpenAICompatClient:
-    settings = load_settings()
+    # Slack tokens are required by Settings but never used here, so stub them:
+    # demanding them made a missing LLM key report as an unrelated config error.
+    settings = load_settings(slack_bot_token="live-test", slack_app_token="live-test")
     return OpenAICompatClient(
         api_key=settings.llm_api_key.get_secret_value(),
         base_url=settings.resolved_base_url,
