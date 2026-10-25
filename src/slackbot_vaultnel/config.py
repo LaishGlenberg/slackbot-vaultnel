@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     thread_ttl_hours: float = Field(default=72.0, gt=0)
     memory_queue_max: int = Field(default=100, ge=1)
 
+    # Integrations (MCP): servers come from mcp.json, next to the database.
+    mcp_rounds: int = Field(default=3, ge=1)
+    mcp_calls_per_turn: int = Field(default=4, ge=1)
+    mcp_result_tokens: int = Field(default=1200, ge=1)
+    mcp_timeout_seconds: float = Field(default=30.0, gt=0)
+
     # Runtime
     db_path: Path = Path("data/vaultnel.db")
     max_concurrent_llm: int = Field(default=4, ge=1)

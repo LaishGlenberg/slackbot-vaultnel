@@ -176,3 +176,35 @@ minutes and recreates the container only when the image ID changes. That avoids
 SSH keys and cross-service IAM for Cloud Build while still deploying on push.
 The database is a named Docker volume, and the `tiktoken` encoding is baked into
 the image so the first reply never depends on a runtime download.
+
+## 2026-10 — Integrations: MCP, thin client, no agent framework
+
+Slack's own guidance for a custom bot is to pass a remote MCP server to the
+model (`tools: [{type: "mcp", …}]` on OpenAI, `mcp_servers` on Anthropic). That
+is provider-side: DeepSeek and OpenRouter do not do it, and this bot answers on
+DeepSeek. The alternatives were an agent framework that owns the loop
+(Pydantic AI, OpenAI Agents SDK, Strands, smolagents, Agno) or a client plus a
+local loop. Every framework replaces `llm/client.py`, whose retry policy,
+`reasoning_effort` mapping and provider quirks are the most-tested code here, so
+the choice was a client plus ~80 lines.
+
+Structure: `mcp` SDK behind `HttpMCPClient` (lazy per-server sessions, allowlist,
+partial failure), pure mapping functions in `integrations/tools.py`, the loop in
+`llm/agent.py`. No new abstraction over messages or memory.
+
+Server config lives in `mcp.json` next to the database, not in an environment
+variable. JSON in `.env` needs shell escaping, and it hides the one rule that
+matters (`token_env` names a variable; the token is never in the config). The
+file also matches every other MCP client. Cost: the file must travel with the
+volume — which it does, because it sits beside the SQLite database.
+
+Costs, accepted:
+
+- Tool schemas and results compete with the 6000-token prompt budget. The
+  allowlist and `MCP_RESULT_TOKENS` clipping are load-bearing, not polish.
+- The SDK's HTTP transport is not exercised offline — the same caveat this log
+  already records for httpx2/respx. URL, headers, tool mapping, result mapping
+  and failure isolation are tested; the wire itself is the SDK's.
+- Slack has no cheap way to stream tool progress, so a slow tool looks like a
+  slow model. A status line would fight the renderer's "text never shrinks"
+  invariant; deferred until it is worth the renderer change.

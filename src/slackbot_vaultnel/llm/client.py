@@ -21,6 +21,7 @@ from openai import AsyncOpenAI
 
 Messages = Sequence[Mapping[str, str]]
 Sleep = Callable[[float], Awaitable[None]]
+Tools = Sequence[Mapping[str, object]]
 
 
 class LLMError(RuntimeError):
@@ -61,6 +62,19 @@ class Completion:
     tokens_out: int | None
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool invocation requested by the model, arguments still raw JSON."""
+
+    id: str
+    name: str
+    arguments: str
+
+
+#: ``stream_turn`` interleaves answer text with tool requests; ``str`` is text.
+StreamItem = str | ToolCall
+
+
 class LLMClient(Protocol):
     def stream(
         self,
@@ -70,6 +84,16 @@ class LLMClient(Protocol):
         max_tokens: int | None = None,
         temperature: Temperature = UNSET,
     ) -> AsyncIterator[str]: ...
+
+    def stream_turn(
+        self,
+        messages: Messages,
+        *,
+        tools: Tools | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: Temperature = UNSET,
+    ) -> AsyncIterator[StreamItem]: ...
 
     async def complete(
         self,
@@ -143,12 +167,35 @@ class OpenAICompatClient:
         max_tokens: int | None = None,
         temperature: Temperature = UNSET,
     ) -> AsyncIterator[str]:
+        """Text only: the plain reply path, unchanged by tool support."""
+
+        async for item in self.stream_turn(
+            messages, model=model, max_tokens=max_tokens, temperature=temperature
+        ):
+            if isinstance(item, str):
+                yield item
+
+    async def stream_turn(
+        self,
+        messages: Messages,
+        *,
+        tools: Tools | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: Temperature = UNSET,
+    ) -> AsyncIterator[StreamItem]:
         params = self._params(
-            messages, model=model, max_tokens=max_tokens, temperature=temperature, stream=True
+            messages,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+            tools=tools,
         )
         # Retries only cover failures before the first delta: once text has been
         # shown to a user, replaying the request would duplicate output.
         stream = await self._call(lambda: self._client.chat.completions.create(**params))
+        pending: dict[int, dict[str, str]] = {}
         try:
             async for chunk in stream:
                 if not chunk.choices:
@@ -157,6 +204,28 @@ class OpenAICompatClient:
                 content = getattr(delta, "content", None)
                 if content:
                     yield content
+                for call in getattr(delta, "tool_calls", None) or ():
+                    slot = pending.setdefault(int(getattr(call, "index", 0)), {})
+                    if getattr(call, "id", None):
+                        slot["id"] = call.id
+                    function = getattr(call, "function", None)
+                    if function is None:
+                        continue
+                    if getattr(function, "name", None):
+                        slot["name"] = function.name
+                    fragment = getattr(function, "arguments", None)
+                    if fragment:
+                        slot["arguments"] = slot.get("arguments", "") + fragment
+            for index in sorted(pending):
+                slot = pending[index]
+                name = slot.get("name")
+                if not name:
+                    continue
+                yield ToolCall(
+                    id=slot.get("id") or f"call_{index}",
+                    name=name,
+                    arguments=slot.get("arguments") or "{}",
+                )
         except openai.APIError as exc:
             raise LLMError(f"the model stream was interrupted: {exc}") from exc
         finally:
@@ -174,6 +243,7 @@ class OpenAICompatClient:
         max_tokens: int | None,
         temperature: Temperature,
         stream: bool,
+        tools: Tools | None = None,
     ) -> dict[str, object]:
         chosen = model or self._model
         params: dict[str, object] = {
@@ -181,6 +251,9 @@ class OpenAICompatClient:
             "messages": list(messages),
             "stream": stream,
         }
+        if tools:
+            params["tools"] = list(tools)
+            params["tool_choice"] = "auto"
         limit = self._max_tokens if max_tokens is None else max_tokens
         if limit:
             params["max_tokens"] = limit

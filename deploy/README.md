@@ -63,6 +63,15 @@ sudo cp ~/slackbot-vaultnel/deploy/update.sh \
 sudo nano /opt/vaultnel/.env   # fill tokens + LLM_API_KEY
 ```
 
+Optional integrations: `mcp.json` lives on the data volume next to the
+database, so put it there once (the token stays in `.env`):
+
+```bash
+sudo nano /opt/vaultnel/mcp.json      # copy mcp.example.json and edit it
+sudo docker run --rm -v vaultnel-data:/data -v /opt/vaultnel:/cfg \
+  alpine cp /cfg/mcp.json /data/mcp.json
+```
+
 Append the image reference to the same file:
 
 ```bash
@@ -95,6 +104,14 @@ and `heartbeat: process alive` every five minutes.
 - **Restart**: `sudo systemctl restart docker` or let `update.sh` recreate it.
 - **Rollback**: pin `VAULTNEL_IMAGE` in `/opt/vaultnel/.env` to an older
   `:<commit-sha>` tag, run `update.sh`, then switch back to `:latest` when ready.
+  The tag is re-pulled from the registry, so no local copy is needed.
+- **Disk**: `update.sh` keeps exactly one image (prunes before the pull, after
+  the pull, and after a restart — so no-op runs clean up too) and logs `disk: …`
+  each time.
+- **Registry**: older `:$COMMIT_SHA` tags live in Artifact Registry, not on the
+  VM. Repo `gcloud-backend` is shared with the backend and staging images, so a
+  cleanup policy there must be scoped with `packageNamePrefixes: [vaultnel]` —
+  a repo-wide delete rule would prune those images too.
 - **Database**: the `vaultnel-data` Docker volume holds
   `/data/vaultnel.db`; it survives image updates. Snapshot the disk before
   schema changes you do not trust.
@@ -102,8 +119,8 @@ and `heartbeat: process alive` every five minutes.
 ## VM sizing notes
 
 `e2-micro` (1 GB) is enough for the bot itself. Builds happen in Cloud Build, so
-the VM never compiles anything. The 10 GB boot disk is tight once Docker and one
-or two images are on it — resizing to 20 GB is online and cheap:
+the VM never compiles anything. One image plus Docker fits comfortably in the
+10 GB boot disk, but resizing is online and cheap if you ever need it:
 
 ```bash
 gcloud compute disks resize slackbot-e2-micro --size=20GB --zone=us-central1-c

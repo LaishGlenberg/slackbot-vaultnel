@@ -312,3 +312,114 @@ async def test_reasoning_effort_is_omitted_when_unset():
     _ = [part async for part in harness.client.stream(MESSAGES)]
 
     assert "reasoning_effort" not in harness.provider.body()
+
+
+# -- tool calls (MCP integration) ---------------------------------------------
+
+
+def tool_delta(index: int, **function) -> str:
+    call: dict = {"index": index, "type": "function"}
+    if "id" in function:
+        call["id"] = function.pop("id")
+    if function:
+        call["function"] = function
+    return chunk(None, tool_calls=[call])
+
+
+async def test_stream_turn_sends_tool_schemas_when_given():
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "github__x", "description": "x", "parameters": {}},
+        }
+    ]
+    harness = make_client(sse(chunk("ok")))
+
+    _ = [item async for item in harness.client.stream_turn(MESSAGES, tools=tools)]
+
+    body = harness.provider.body()
+    assert body["tools"] == tools
+    assert body["tool_choice"] == "auto"
+
+
+async def test_stream_turn_omits_tools_when_not_given():
+    harness = make_client(sse(chunk("ok")))
+
+    _ = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert "tools" not in harness.provider.body()
+
+
+async def test_stream_turn_yields_text_deltas():
+    harness = make_client(sse(chunk("Hel"), chunk("lo")))
+
+    items = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert items == ["Hel", "lo"]
+
+
+async def test_stream_turn_accumulates_a_fragmented_tool_call():
+    harness = make_client(
+        sse(
+            tool_delta(0, id="call_1", name="github__get_pull_request", arguments='{"num'),
+            tool_delta(0, arguments='ber": 41}'),
+        )
+    )
+
+    items = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert len(items) == 1
+    call = items[0]
+    assert call.id == "call_1"
+    assert call.name == "github__get_pull_request"
+    assert json.loads(call.arguments) == {"number": 41}
+
+
+async def test_stream_turn_keeps_parallel_tool_calls_in_index_order():
+    harness = make_client(
+        sse(
+            tool_delta(1, id="b", name="second", arguments="{}"),
+            tool_delta(0, id="a", name="first", arguments="{}"),
+        )
+    )
+
+    items = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert [item.name for item in items] == ["first", "second"]
+
+
+async def test_stream_turn_yields_text_before_the_tool_call():
+    harness = make_client(
+        sse(chunk("Let me check. "), tool_delta(0, id="c1", name="github__x", arguments="{}"))
+    )
+
+    items = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert items[0] == "Let me check. "
+    assert items[1].name == "github__x"
+
+
+async def test_stream_turn_synthesises_a_missing_call_id():
+    harness = make_client(sse(tool_delta(0, name="github__x", arguments="{}")))
+
+    [call] = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert call.id
+
+
+async def test_stream_turn_retries_only_before_the_first_delta():
+    """A failure opening the stream is retried; the iteration itself is not.
+
+    Once deltas have been yielded there is no second request, which is what
+    keeps a retry from duplicating half an answer in Slack.
+    """
+
+    from openai import APIConnectionError
+
+    harness = make_client(APIConnectionError(request=httpx2.Request("POST", URL)))
+
+    with pytest.raises(LLMError):
+        _ = [item async for item in harness.client.stream_turn(MESSAGES)]
+
+    assert len(harness.provider.requests) == 3
+    assert all("messages" in json.loads(r.content) for r in harness.provider.requests)

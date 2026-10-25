@@ -31,6 +31,7 @@ from typing import Protocol
 
 from slackbot_vaultnel.config import Settings
 from slackbot_vaultnel.history.store import Store, Thread, Turn, utcnow
+from slackbot_vaultnel.llm.agent import ToolAgent, Tooling
 from slackbot_vaultnel.llm.client import AuthError, LLMError, RateLimited
 from slackbot_vaultnel.memory.context import PromptBudget, PromptRequest, build
 from slackbot_vaultnel.memory.facts import facts_for_prompt
@@ -77,6 +78,7 @@ class Handlers:
         renderer_factory: RendererFactory = Renderer,
         llm_semaphore: asyncio.Semaphore | None = None,
         writer: TurnWriter | None = None,
+        tooling: Tooling | None = None,
     ) -> None:
         self.client = client
         self.store = store
@@ -87,6 +89,7 @@ class Handlers:
         self.clock = clock
         self.renderer_factory = renderer_factory
         self.llm_semaphore = llm_semaphore
+        self.tooling = tooling
 
         self._budget = PromptBudget.from_settings(settings)
         self._seen: OrderedDict[str, None] = OrderedDict()
@@ -382,6 +385,15 @@ class Handlers:
                 await self._record(thread, [user_turn])
 
     def _stream(self, prompt: list[dict[str, str]]) -> AsyncIterator[str]:
+        if self.tooling is not None and self.tooling.tools:
+            return ToolAgent(
+                self.llm,
+                self.tooling.tools,
+                self.tooling.call,
+                max_rounds=self.settings.mcp_rounds,
+                max_calls=self.settings.mcp_calls_per_turn,
+                result_tokens=self.settings.mcp_result_tokens,
+            ).run(prompt)
         return self.llm.stream(
             prompt,
             max_tokens=self.settings.llm_max_tokens,

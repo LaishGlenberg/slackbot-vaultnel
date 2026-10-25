@@ -25,7 +25,18 @@ TOKEN="$(curl -sf -H 'Metadata-Flavor: Google' \
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
 printf '%s' "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "$REGISTRY" >/dev/null
 
+# Reclaim space *before* pulling: on a small boot disk the pull is the first
+# thing to fail, and with `set -e` nothing below would run to clean up after it.
+docker container prune -f >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
+
 docker pull --quiet "$IMAGE" >/dev/null
+
+# Before the guard, not after it: the guard exits on every ordinary timer run,
+# so cleanup placed below would only happen when the container changes. An
+# untagged image left by an interrupted run would then never be reclaimed. The
+# running image is always protected, so this is a no-op most of the time.
+docker image prune -a -f >/dev/null 2>&1 || true
 
 current="$(docker inspect --format '{{.Image}}' vaultnel 2>/dev/null || true)"
 target="$(docker inspect --format '{{.Id}}' "$IMAGE")"
@@ -45,8 +56,9 @@ docker run -d \
     -v vaultnel-data:/data \
     "$IMAGE" >/dev/null
 
-# Keep the disk honest without guessing at ages: the running image is tagged,
-# so deleting every dangling image except the two newest leaves exactly three
-# (current + two rollback candidates) however often we deploy.
-docker image ls -q --filter dangling=true | tail -n +3 \
-    | xargs -r docker image rm >/dev/null 2>&1 || true
+# One image, always: `-a` removes every image no container references, which
+# includes stale :commit-sha tags left behind by a rollback. The running image
+# is protected and volumes are never touched, so /data is safe. Rollback still
+# works because it re-pulls the tag from Artifact Registry.
+docker image prune -a -f >/dev/null 2>&1 || true
+echo "disk: $(df -h / | tail -1)"

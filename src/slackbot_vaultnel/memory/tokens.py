@@ -34,6 +34,20 @@ def count_tokens(text: str) -> int:
     return len(_encoding().encode(text, disallowed_special=()))
 
 
+def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Hard token cut, used where a budget is a ceiling rather than a target.
+
+    Decoding a truncated id list can split a multi-byte character, so callers
+    treat the result as text, not as an exactly round-trippable string.
+    """
+
+    if max_tokens <= 0:
+        return ""
+    if count_tokens(text) <= max_tokens:
+        return text
+    return _encoding().decode(_encoding().encode(text, disallowed_special=())[:max_tokens])
+
+
 def tokens_for_messages(messages: Iterable[Mapping[str, object]]) -> int:
     total = 0
     for message in messages:

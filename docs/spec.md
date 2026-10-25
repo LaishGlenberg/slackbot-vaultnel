@@ -10,7 +10,7 @@ channels, streams its answer into the message as it is generated, and maintains
 memory across a thread without ever accumulating unbounded context.
 
 Non-goals for v1: multi-workspace OAuth distribution, file/image understanding,
-tool calling / RAG over external knowledge bases, admin web UI.
+embedding-indexed RAG over a corpus, admin web UI.
 
 ## 2. Scope
 
@@ -19,9 +19,10 @@ tool calling / RAG over external knowledge bases, admin web UI.
 | DM conversations | Block Kit interactive workflows |
 | `@vaultnel` in public/private channels | Multi-tenant OAuth installs |
 | Automatic short- + long-term memory | Voice / transcription |
-| Streaming responses | External tool calling |
+| Streaming responses | Embedding-indexed RAG |
 | Provider switch: DeepSeek \| OpenRouter | Analytics dashboard |
-| `/ask` + thread reset | Multi-instance horizontal scale |
+| MCP integrations (remote tools) | Multi-instance horizontal scale |
+| `/ask` + thread reset | — | |
 
 ## 3. Architecture
 
@@ -72,6 +73,9 @@ src/slackbot_vaultnel/
   memory/context.py  # pure function: (thread, query, now) -> message list
   memory/writer.py   # background writer: persist, compact, extract
   memory/tokens.py   # token estimator (tiktoken wrapper) + budgets
+  integrations/mcp.py    # remote MCP servers: discovery, routing, isolation
+  integrations/tools.py  # function schemas, clipping, untrusted wrapping
+  llm/agent.py           # bounded tool loop (stream -> tools -> stream)
   history/store.py   # Store protocol + SqliteStore
   history/schema.sql
 tests/
@@ -268,6 +272,48 @@ answer is still streaming also resets. Reactions on other people's messages, on
 unknown timestamps, or from the bot itself are ignored. `/ask reset` and the
 reaction share `store.archive_thread`, so facts and raw rows survive either way.
 
+### 5.7 Integrations (MCP)
+
+External services are configuration, not code. `mcp.json` describes remote MCP
+servers; another integration is another entry, not another module. It lives
+next to the database — `data/mcp.json` in development, `/data/mcp.json` in the
+container — so the existing volume already carries it and no new mount or path
+variable is needed. A missing file means no integrations. `mcp.example.json` is
+the template.
+
+```json
+{"mcpServers": {"github": {
+    "url": "https://api.githubcopilot.com/mcp/",
+    "token_env": "GITHUB_TOKEN",
+    "tools": ["get_pull_request", "list_pull_requests", "get_check_runs"]}}}
+```
+
+- Discovery runs once at startup and connects lazily per server. A server that
+  fails is logged and skipped; the rest still work. Only when every server fails
+  does the bot start without tools.
+- `token_env` **names** the environment variable holding a bearer token. Secrets
+  are never inlined in config, never logged, and never sent to the model. The
+  name must be upper-case, so a pasted token fails at startup instead of
+  half-working.
+- `tools` is an allowlist. Remote servers expose 30–40 tools whose schemas cost
+  prompt space before the user says anything, so an empty allowlist on a 6000
+  token budget is a mistake, not a default.
+- Model-facing names are `<server>__<tool>`, sanitised to the provider's
+  `[A-Za-z0-9_-]{1,64}` function-name shape, and de-duplicated after
+  truncation.
+- The loop is local (`llm/agent.py`), not a framework: stream a turn, execute
+  the requested tools, append `assistant.tool_calls` + `tool` messages, repeat.
+  It is bounded by `MCP_ROUNDS`, `MCP_CALLS_PER_TURN`, and a final round that
+  runs **without** tools so an answer is always produced.
+- Each result is clipped to `MCP_RESULT_TOKENS` and wrapped in
+  `--- begin <server>/<tool> (untrusted external content…) ---` delimiters. The
+  end marker is escaped inside the body: issue titles, PR bodies and file
+  contents are attacker-controlled.
+- Tool failures (bad JSON arguments, unknown tool, dead integration) become
+  `tool` content the model can read. They never raise into the reply path.
+- `stream_turn` yields text deltas as they arrive and tool calls once the stream
+  ends, so `slack/render.py` still sees text only and "text never shrinks" holds.
+
 ## 6. Configuration
 
 `pydantic-settings`, loaded from `.env` (gitignored), template committed as
@@ -299,10 +345,18 @@ reaction share `store.archive_thread`, so facts and raw rows survive either way.
 | `PROMPT_BUDGET_TOKENS` | no | `6000` | hard ceiling |
 | `THREAD_TTL_HOURS` | no | `72` | soft reset |
 | `MEMORY_QUEUE_MAX` | no | `100` | |
+| `MCP_ROUNDS` | no | `3` | tool rounds before a tool-free final answer |
+| `MCP_CALLS_PER_TURN` | no | `4` | hard cap on tool executions per reply |
+| `MCP_RESULT_TOKENS` | no | `1200` | per tool result, before wrapping |
+| `MCP_TIMEOUT_SECONDS` | no | `30` | per MCP request |
 | `DB_PATH` | no | `data/vaultnel.db` | parent dir auto-created |
 | `MAX_CONCURRENT_LLM` | no | `4` | global semaphore |
 | `STREAM_INTERVAL` | no | `1.0` | seconds between updates |
 | `LOG_LEVEL` | no | `INFO` | |
+
+Integration servers are the one exception to env-var config: they live in
+`mcp.json` next to the database because a JSON blob inside `.env` needs shell
+escaping and hides the token-naming rule. Budgets stay in env.
 
 Secrets are never logged; startup logs a redacted summary (first 6 chars of
 each token).
@@ -442,6 +496,9 @@ Everything below runs offline; no Slack, no LLM, no sleeps.
 | fact extraction | scripted LLM, malformed JSON cases | dedupe, caps, scope validation, silent failure |
 | `llm/client` | injected `httpx2` MockTransport | URL/model/auth/params, delta assembly, retry/backoff, reasoner param drop |
 | `slack/render` | fake client + fake clock | chunk boundaries, fence repair, throttle cadence |
+| `integrations/mcp` | fake session factory + real `mcp.types` | lazy connect, headers, allowlists, partial failure |
+| `integrations/tools` | pure functions | namespacing, clipping, injection markers |
+| `llm/agent` | `ScriptedTurnLLM` + fake caller | round/call caps, error recovery, result budget |
 | `slack/handlers` | fake client, `InMemoryStore`, `ScriptedLLM` | mention stripping, thread targeting, ignored subtypes, no double reply |
 | live smoke | `@pytest.mark.slow` | one real round trip, skipped without `LLM_API_KEY` |
 
@@ -577,6 +634,7 @@ committed.
 | M6 | compaction + fact extraction + recall | prompt size flat after 50 turns; facts deduped |
 | M7 | reset + TTL + error handling + README | `pytest` green incl. slow smoke |
 | M8 | Dockerfile + deploy | bot online with no local process |
+| M9 | MCP integrations (GitHub first) | tools discovered at startup and a tool call changes the answer |
 
 ## 13. Decisions
 

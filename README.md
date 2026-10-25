@@ -11,6 +11,8 @@ relevant decisions from other threads in the same channel.
 - **Rolling summary** — older turns are compacted into a running summary.
 - **Durable facts** — scoped per user, channel and workspace, with dedupe.
 - **Recall** — SQLite FTS5 retrieves relevant messages from other threads.
+- **Integrations** — remote MCP servers (GitHub first) let it look things up
+  live; results are clipped and treated as untrusted external content.
 - **Reset** — 🗑️ on a bot reply or `/ask reset` archives the thread;
   `/ask forget me` deletes your facts.
 
@@ -31,6 +33,10 @@ Socket Mode, and an API key for DeepSeek or OpenRouter.
    cp .env.example .env
    # fill SLACK_BOT_TOKEN, SLACK_APP_TOKEN and LLM_API_KEY
    ```
+
+   Optional: copy `mcp.example.json` to `data/mcp.json` to give it tools, and
+   put a read-only token in `GITHUB_TOKEN` in `.env`. Secrets never go in
+   `mcp.json`.
 
 3. Run it:
 
